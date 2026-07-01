@@ -1,0 +1,44 @@
+[project]
+name = "zbsniff"
+version = "0.1.0"
+description = "Host app for the Zigbee Sniffer & Diagnostics Platform"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "pyserial>=3.5",
+]
+
+[project.optional-dependencies]
+# Full host app (Block C) — decode/decrypt, API, analytics.
+host = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "scapy>=2.5",
+    "cryptography>=42.0",
+    "aiomqtt>=2.0",          # Zigbee2MQTT integration
+    "websockets>=12.0",      # ZHA / HA WebSocket integration
+    "pydantic>=2.0",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+zbsniff-bridge = "zbsniff.tools.pcap_bridge:main"
+zbsniff-listen = "zbsniff.tools.listen:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["zbsniff*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100

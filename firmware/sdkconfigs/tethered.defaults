@@ -1,0 +1,7 @@
+# usb-sniffer profile overrides (applied on top of sdkconfig.defaults).
+# Console on UART0 (the "UART" port) so it never corrupts the binary capture
+# stream we drive over the native USB-Serial/JTAG ("USB" port).
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+# CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG is not set
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y

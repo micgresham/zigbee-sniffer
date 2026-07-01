@@ -1,0 +1,761 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zigbee Sniffer — Tethered</title>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--panel2:#1c232c;--line:#2a3340;--fg:#e6edf3;--dim:#8b97a3;
+--good:#3fb950;--fair:#d29922;--weak:#f85149;--accent:#58a6ff;--accent2:#7c5cff}
+/* Day theme: light background, dark foreground (accent/status colors unchanged). */
+body.light{--bg:#f4f6f8;--panel:#ffffff;--panel2:#eef1f5;--line:#d5dbe2;--fg:#1a2029;--dim:#5b6672}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{display:flex;align-items:center;gap:12px;padding:11px 18px;background:linear-gradient(180deg,#1b2230,#161b22);
+border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+header h1{font-size:16px;margin:0;font-weight:680;letter-spacing:.2px}
+header h1 span{color:var(--accent)}
+#conn{font-size:12px;padding:3px 10px;border-radius:20px;font-weight:600}
+#conn.ok{background:#0f2e1a;color:var(--good);box-shadow:0 0 0 1px #1c4}
+#conn.bad{background:#3a1414;color:var(--weak)}
+#conn.warn{background:#3a2e14;color:var(--fair)}
+.metrics{margin-left:auto;display:flex;gap:18px;color:var(--dim);font-size:12px}
+.metrics b{color:var(--fg);font-variant-numeric:tabular-nums}
+.controls{display:flex;gap:8px;padding:12px 18px;align-items:center;flex-wrap:wrap;background:var(--panel);border-bottom:1px solid var(--line)}
+.controls label{color:var(--dim);font-size:13px}
+.controls input{width:60px;background:#0b0e13;color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:6px}
+button{background:#222b38;color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:7px 13px;cursor:pointer;font-size:13px;transition:.12s}
+button:hover{border-color:var(--accent);background:#28333f}
+button.on{border-color:var(--accent);color:var(--accent)}
+.pill{font-size:11px;padding:2px 8px;border-radius:10px;background:#0f2e1a;color:var(--good)}
+.grid{display:grid;grid-template-columns:1.25fr 1fr;gap:14px;padding:14px 18px 24px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;min-width:0}
+.panel h2{font-size:12px;margin:0 0 10px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;display:flex;justify-content:space-between}
+.panel h2 .cnt{color:var(--accent);font-weight:700}
+.panel.wide{grid-column:1/-1}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:5px 7px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--dim);font-weight:500;position:sticky;top:0;background:var(--panel)}
+tr.click{cursor:pointer}tr.click:hover td{background:#1d2733}
+.good{color:var(--good)}.fair{color:var(--fair)}.weak{color:var(--weak)}.dim{color:var(--dim)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.scroll{max-height:300px;overflow:auto;display:block}
+.tag{font-size:10px;padding:1px 6px;border-radius:8px;background:#22303f;color:var(--dim)}
+.tag.coord{background:#10243f;color:var(--accent)}
+.lock{color:var(--accent2)}
+#routing{width:100%;height:340px;display:block}
+#routing text{font:10px ui-monospace,monospace}
+#routing circle{cursor:pointer}
+.spectrum{display:flex;align-items:flex-end;gap:5px;height:160px}
+.bar{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%}
+.bar .fill{width:100%;border-radius:3px 3px 0 0;background:var(--accent);min-height:2px;transition:height .3s}
+.bar .fill.good{background:var(--good)}.bar .fill.fair{background:var(--fair)}
+.bar .fill.weak{background:var(--weak)}.bar .fill.dim{background:#2a3340}
+.bar .v{font-size:9px;color:var(--dim);height:12px}
+.bar span{font-size:10px;color:var(--dim);margin-top:3px}
+.bar{position:relative}
+.bar .peak{position:absolute;left:0;width:100%;height:2px;background:#cdd6e0;opacity:.8}
+.wifirow{display:flex;gap:5px;margin-top:4px}
+.wifirow .wc{flex:1;text-align:center;font-size:9px;color:#6aa0d8}
+.wifirow .wc.on{background:#10243f;border-radius:3px;color:var(--accent)}
+#waterfall{width:100%;height:150px;border:1px solid var(--line);border-radius:6px;background:#080b0f;image-rendering:pixelated}
+.fill.nodata{background:repeating-linear-gradient(45deg,#1a1f27,#1a1f27 3px,#11151b 3px,#11151b 6px)}
+.legend{font-size:11px;color:var(--dim);display:flex;gap:12px;margin-top:6px}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+.tabs{display:flex;gap:6px;padding:0 2px 0;margin:14px 0 0}
+.tabbtn{background:#0f141a;border:1px solid var(--line);border-bottom:none;border-radius:7px 7px 0 0;color:var(--dim);padding:8px 16px;cursor:pointer;font-size:13px;font-weight:600}
+.tabbtn.on{background:var(--panel);color:var(--fg)}
+.tabbtn:hover{color:var(--fg)}
+.capind{font-size:12px;font-weight:600;padding:2px 10px;border-radius:12px;margin-left:10px;vertical-align:1px}
+.capind.run{background:#0d2a16;color:#3fb950}
+.capind.run::before{content:"● ";animation:cappulse 1.2s infinite}
+.capind.quiet{background:#2a230d;color:#d29922}
+.capind.sweep{background:#0d1f2a;color:#58a6ff}
+.capind.idle{background:#1a1f27;color:#8b97a3}
+@keyframes cappulse{50%{opacity:.3}}
+/* control panel */
+.cpanel .cgroups{display:flex;flex-wrap:wrap;gap:18px}
+.cgroup{display:flex;flex-direction:column;gap:6px}
+.cgroup>label{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.04em}
+.cgroup .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.cgroup input{background:#0b0e13;color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:6px;width:64px}
+select{background:#0b0e13;color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:6px}
+#c-decstat.on{background:#0f2e1a;color:var(--good)}
+.devstatus{margin-top:14px;padding-top:12px;border-top:1px solid var(--line);display:flex;gap:22px;flex-wrap:wrap;font-size:12px;color:var(--dim)}
+.devstatus b{color:var(--fg);font-variant-numeric:tabular-nums}
+#ha-stat.on,#ha-stat.ok{background:#0f2e1a;color:var(--good)}
+#ha-stat.err{background:#3a1414;color:var(--weak)}
+.diags{display:flex;flex-direction:column;gap:8px}
+.diag{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;background:#0f141b;border-left:3px solid var(--line)}
+.diag.high{border-left-color:var(--weak)}.diag.warn{border-left-color:var(--fair)}.diag.info{border-left-color:var(--good)}
+.diag .sev{font-size:10px;text-transform:uppercase;font-weight:700;width:42px}
+.diag.high .sev{color:var(--weak)}.diag.warn .sev{color:var(--fair)}.diag.info .sev{color:var(--good)}
+.diag .cat{font-weight:600;width:120px}.diag .msg{color:var(--dim);flex:1}
+.diag .addr{cursor:pointer;color:var(--accent)}
+.connstats{display:flex;gap:20px;flex-wrap:wrap;font-size:12px;color:var(--dim);margin-bottom:10px;align-items:center}
+.connstats b{color:var(--fg);font-variant-numeric:tabular-nums}
+.logs{margin:0;padding:10px;background:#080b0f;border:1px solid var(--line);border-radius:8px;
+font:11px/1.5 ui-monospace,Menlo,monospace;color:#9fb0c0;max-height:200px;overflow:auto;white-space:pre-wrap}
+/* device detail drawer */
+#drawer{position:fixed;top:0;right:0;height:100%;width:420px;max-width:92vw;background:var(--panel2);
+border-left:1px solid var(--line);transform:translateX(100%);transition:.2s;z-index:20;display:flex;flex-direction:column}
+#drawer.open{transform:none;box-shadow:-12px 0 40px #0008}
+#drawer header{background:var(--panel2)}
+#dclose{margin-left:auto}
+#dbody{padding:14px 18px;overflow:auto}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:13px;margin-bottom:14px}
+.kv div:nth-child(odd){color:var(--dim)}
+@media(max-width:860px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Zigbee <span>Sniffer</span> · Tethered</h1>
+  <span id="conn" class="bad">host: disconnected</span>
+  <span id="cap-ind-hdr" class="capind idle">■ idle</span>
+  <div class="metrics">
+    <span>ch <b id="m-ch">—</b></span>
+    <span>captured <b id="m-cap">0</b></span>
+    <span>dropped <b id="m-drop">0</b></span>
+    <span>devices <b id="m-dev">0</b></span>
+    <span id="m-dec" class="pill" style="display:none">decrypting</span>
+  </div>
+</header>
+
+<div class="tabs">
+  <button class="tabbtn on" data-t="overview">Overview</button>
+  <button class="tabbtn" data-t="frames">Live frames</button>
+  <button class="tabbtn" data-t="spectrum">RF spectrum</button>
+  <button class="tabbtn" data-t="active">Active testing</button>
+  <button class="tabbtn" data-t="diagnostics">Diagnostics</button>
+  <button class="tabbtn" data-t="config">Config</button>
+  <button class="tabbtn" data-t="about">About</button>
+</div>
+
+<div class="grid">
+  <div class="panel wide cpanel" data-tab="frames">
+    <h2>Capture controls <span id="cap-ind" class="capind idle">■ idle</span>
+      <span class="dim" style="font-weight:400;text-transform:none">— drive the tethered node live</span></h2>
+    <div class="cgroups">
+      <div class="cgroup"><label>Capture</label><div class="row">
+        <button id="c-start">▶ Start</button><button id="c-stop">⏹ Stop</button>
+        <button id="c-restart">↻ Restart</button><button id="c-reset">⟳ Reset radio</button>
+      </div></div>
+      <div class="cgroup"><label title="what this radio does: Capture = passive frame sniffing; ED spectrum sweep = continuous energy scan for the RF spectrum tab (no frame capture); Capture + ED = interleave both (single radio time-slices); Idle = radio parked. With multiple radios, prefer per-radio Roles in Config.">Mode ⓘ</label><div class="row">
+        <select id="c-mode" title="Capture = sniff frames · ED spectrum sweep = feed the RF spectrum tab (stops capture) · Capture + ED = both, time-sliced on one radio · Idle = park the radio">
+        <option value="1">Capture</option><option value="2">ED spectrum sweep</option>
+        <option value="3">Capture + ED</option><option value="0">Idle</option></select>
+      </div></div>
+      <div class="cgroup"><label>Channel</label><div class="row">
+        <input id="c-ch" type="number" min="11" max="26" value="20">
+        <button id="c-setch">Set</button><button id="c-scan">Scan spectrum</button>
+      </div></div>
+    </div>
+    <div class="devstatus" id="devstatus"><span class="dim">device status: waiting…</span></div>
+  </div>
+
+  <div class="panel wide cpanel" data-tab="config">
+    <h2>Configuration <span class="dim" style="font-weight:400;text-transform:none">— network, decryption, integrations &amp; export (saved to zbsniff.yaml)</span></h2>
+    <div class="cgroups">
+      <div class="cgroup"><label>Display theme</label><div class="row">
+        <select id="theme-sel"><option value="auto">Auto (follow system)</option>
+        <option value="night">Night (dark)</option><option value="day">Day (light)</option></select>
+      </div></div>
+      <div class="cgroup"><label>Channel hopping</label><div class="row">
+        <input id="c-dwell" type="number" min="0" max="2000" value="0">
+        <button id="c-hop">Apply</button><span class="dim">ms/ch · 0 = pinned</span>
+      </div></div>
+      <div class="cgroup" style="flex:1 1 340px"><label>Decryption key (network key)</label><div class="row">
+        <input id="c-key" type="text" placeholder="hex, separators optional" style="flex:1;min-width:170px">
+        <button id="c-setkey">Set</button><button id="c-clearkey">Clear</button>
+        <button id="c-savekey" title="store the key in the device's NVS">Save to device</button>
+        <span id="c-decstat" class="tag">off</span>
+      </div></div>
+      <div class="cgroup" style="flex:1 1 360px"><label>Home Assistant (pull ZHA device info)</label><div class="row">
+        <input id="ha-host" type="text" placeholder="homeassistant.local or 192.168.1.x" style="flex:1;min-width:180px" title="just the host or IP — the URL is built automatically (ws://host:8123/api/websocket)">
+        <input id="ha-token" type="password" placeholder="long-lived token" style="width:120px">
+        <button id="ha-connect">Connect</button>
+        <span id="ha-stat" class="tag">off</span>
+      </div></div>
+      <div class="cgroup" style="flex:1 1 300px"><label>Raw command (advanced)</label><div class="row">
+        <input id="raw-type" type="text" placeholder="type" style="width:54px" title="message type, e.g. 0x81">
+        <input id="raw-hex" type="text" placeholder="payload hex" style="flex:1;min-width:110px">
+        <button id="raw-send">Send</button>
+      </div></div>
+      <div class="cgroup"><label>Export data</label><div class="row">
+        <button data-exp="devices">Devices</button><button data-exp="frames">Frames</button>
+        <button data-exp="incidents">Incidents</button><button data-exp="diagnostics">Diag</button>
+        <button data-exp="spectrum">Spectrum</button>
+        <select id="exp-fmt"><option value="csv">CSV</option><option value="json">JSON</option></select>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="panel wide" data-tab="config">
+    <h2>Radios <span class="dim" style="font-weight:400;text-transform:none;font-size:11px">— assign each C6 a function (up to 4). Roles apply live &amp; are saved.</span></h2>
+    <div id="radios-note" class="dim" style="font-size:11px;margin-bottom:6px">…</div>
+    <div class="scroll"><table><thead><tr>
+      <th>Port</th><th title="give each dongle a unique id so roles target the right one">Radio ID</th>
+      <th>Role / function</th><th>Ch</th><th>Frames</th><th>Probes</th><th>Seen</th></tr></thead>
+      <tbody id="radios-tbl"></tbody></table></div>
+    <div class="dim" style="font-size:11px;margin-top:6px">
+      <b>sniffer</b> capture (pinned) · <b>spectrum</b> continuous ED sweep (spectrum tab) ·
+      <b>tester</b> capture + default probe radio · <b>hopper</b> capture, channel-hopping · <b>idle</b> parked</div>
+  </div>
+
+  <div class="panel">
+    <h2><span>Routing tree → coordinator <span class="cnt" id="r-cnt">0 links</span></span>
+      <span style="display:flex;gap:6px">
+        <button id="rg-leaves" class="on" style="font-size:11px;padding:2px 8px">End devices</button>
+        <button id="rg-reset" style="font-size:11px;padding:2px 8px">Reset view</button>
+      </span></h2>
+    <svg id="routing" viewBox="0 0 600 340" preserveAspectRatio="xMidYMid meet" style="cursor:grab;touch-action:none"></svg>
+    <div class="legend">
+      <span><i style="background:var(--accent)"></i>coordinator</span>
+      <span><i style="background:var(--good)"></i>strong ⌖</span>
+      <span><i style="background:var(--fair)"></i>fair ⌖</span>
+      <span><i style="background:var(--weak)"></i>weak / isolated</span>
+      <span>— — parent not yet observed</span>
+    </div>
+    <div class="dim" style="font-size:10px;margin-top:2px">Edge colour = link quality <b>as heard by the sniffer</b> (one vantage point), not the device's own link. Scroll to zoom, drag to pan.</div>
+  </div>
+
+  <div class="panel">
+    <h2><span>Devices in range <span class="cnt" id="d-cnt">0</span></span>
+      <span class="dim" style="font-weight:400;text-transform:none;font-size:11px">⌖ = at sniffer · Net = network (HA)</span></h2>
+    <div class="scroll"><table><thead><tr><th>Address</th><th>Name</th><th></th>
+      <th title="RSSI as heard at the SNIFFER's location — depends where the sniffer is">RSSI⌖</th>
+      <th title="link quality derived from the sniffer's RSSI">Qual⌖</th>
+      <th title="LQI the coordinator reports for this device's actual link to its router — needs Home Assistant connected">Net LQI</th>
+      <th title="RSSI the coordinator reports for this device. ZHA usually reports only LQI, not RSSI, so this is often blank (—) — Net LQI is the network's link metric">Net RSSI</th>
+      <th>#</th><th>Seen</th></tr></thead>
+    <tbody id="devices"></tbody></table></div>
+  </div>
+
+  <div class="panel wide" data-tab="spectrum">
+    <h2>RF spectrum analyzer <span class="dim" style="font-weight:400;text-transform:none">802.15.4 channels 11–26 (2.4 GHz)</span></h2>
+    <div class="row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+      <label class="dim">dwell <input id="sp-dwell" type="number" min="1" max="500" value="20" style="width:58px"> ms/ch</label>
+      <button id="sp-scan">Scan once</button>
+      <button id="sp-cont">Continuous</button>
+      <button id="sp-peakclear">Clear peaks</button>
+      <span class="dim">bar = current · ▔ = peak-hold · row below = overlapping Wi-Fi channel</span>
+      <span id="sp-status" class="weak" style="font-size:11px"></span>
+    </div>
+    <div class="spectrum" id="spectrum"></div>
+    <div class="wifirow" id="wifirow"></div>
+    <div class="dim" style="margin:12px 0 4px;font-size:11px;text-transform:uppercase;letter-spacing:.05em">Waterfall (energy over time)</div>
+    <canvas id="waterfall" width="640" height="150"></canvas>
+  </div>
+
+  <div class="panel">
+    <h2>Incidents <span class="cnt" id="i-cnt">0</span></h2>
+    <div class="scroll"><table><thead><tr><th>When</th><th>Device</th><th>Reason</th><th>Ch</th><th>Silent</th></tr></thead>
+    <tbody id="incidents"></tbody></table></div>
+  </div>
+
+  <div class="panel wide" data-tab="diagnostics">
+    <h2>Automatic diagnostics <span class="cnt" id="dg-cnt">0</span></h2>
+    <div id="diagnostics" class="diags"><span class="dim">analysing…</span></div>
+  </div>
+
+  <div class="panel wide" data-tab="active">
+    <h2>Active testing <span class="dim" style="font-weight:400;text-transform:none;font-size:11px">⚠ transmits on your live network — verifies a device's radio is alive on-channel</span></h2>
+    <div class="row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+      <label class="dim">device <input id="at-addr" placeholder="0x1234" style="width:90px"></label>
+      <label class="dim">radio
+        <select id="at-radio"><option value="">any</option></select></label>
+      <button id="at-probe">Probe once</button>
+      <span style="width:1px;height:20px;background:var(--line)"></span>
+      <label class="dim">every <input id="at-interval" type="number" min="5" value="60" style="width:60px"> s</label>
+      <button id="at-schedule">Schedule</button>
+      <span class="dim" id="at-pan"></span>
+    </div>
+    <div id="at-radios" class="dim" style="font-size:11px;margin-bottom:8px"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <div><div class="dim" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Schedules</div>
+        <div class="scroll" style="max-height:160px"><table><thead><tr><th>Device</th><th>Every</th><th>Runs</th><th>Acks</th><th></th></tr></thead>
+        <tbody id="at-sched"></tbody></table></div></div>
+      <div><div class="dim" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Recent results</div>
+        <div class="scroll" style="max-height:160px"><table><thead><tr><th>Time</th><th>Device</th><th>Radio</th><th>Result</th><th>RSSI⌖</th></tr></thead>
+        <tbody id="at-results"></tbody></table></div></div>
+    </div>
+  </div>
+
+  <div class="panel wide" data-tab="diagnostics">
+    <h2><span>Connection &amp; logs <span class="cnt" id="cl-conn">—</span></span>
+      <button id="c-reconnect" style="font-size:11px;padding:2px 10px" title="drop and re-initialise the serial link to the C6">↻ Reconnect</button></h2>
+    <div class="connstats" id="connstats"><span class="dim">…</span></div>
+    <pre id="loglines" class="logs"></pre>
+  </div>
+
+  <div class="panel wide" data-tab="frames">
+    <h2>Live frames (decoded) <button id="pause2" style="font-size:11px;padding:2px 8px">⏸</button></h2>
+    <div class="scroll" style="max-height:340px"><table><thead><tr><th>Time</th><th>Ch</th><th>RSSI</th><th>LQI</th><th>Type</th><th>Summary</th></tr></thead>
+    <tbody id="frames"></tbody></table></div>
+  </div>
+
+  <div class="panel wide" data-tab="about">
+    <h2>About</h2>
+    <div id="about-body" class="kv" style="max-width:640px"><span class="dim">…</span></div>
+    <div class="dim" style="font-size:12px;margin-top:10px">
+      Zigbee Sniffer &amp; Diagnostics Platform — a full-featured 802.15.4 sniffer, routing/RF
+      diagnostics, and active testing for ESP32-C6, with a single-binary Go host.
+    </div>
+  </div>
+</div>
+
+<div id="drawer">
+  <header><h1 id="d-title">Device</h1><button id="dclose">✕</button></header>
+  <div id="dbody"></div>
+</div>
+
+<script>
+const COORD="0x0000";
+const lqiClass=l=>l>=100?"good":l>=50?"fair":"weak";
+const lqiColor=l=>l==null?"#3a4452":l>=100?"#3fb950":l>=50?"#d29922":"#f85149";
+// The C6's 802.15.4 LQI reads unusually low; RSSI is the reliable signal metric.
+// Derive a 0–100% link quality from RSSI (−45 dBm→100%, −95 dBm→0%).
+const rssiQ=r=>r==null?null:Math.max(0,Math.min(100,Math.round((r+95)/50*100)));
+const qClass=q=>q==null?"dim":q>=66?"good":q>=33?"fair":"weak";
+const qColor=q=>q==null?"#3a4452":q>=66?"#3fb950":q>=33?"#d29922":"#f85149";
+const fmtTime=ts=>{if(!ts)return"";const d=new Date(ts*1000);
+  const sameDay=d.toDateString()===new Date().toDateString();
+  return sameDay?d.toLocaleTimeString([],{hour12:false})
+    :d.toLocaleString([],{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false});};
+const ageStr=s=>{const d=(Date.now()/1000)-s;return d<60?Math.floor(d)+"s":d<3600?Math.floor(d/60)+"m":Math.floor(d/3600)+"h";};
+let frames=[],status=null,wsOpen=false,lastData=0,paused=false,devices=[],routing={nodes:[],edges:[]},selected=null;
+
+function setConn(){const e=document.getElementById("conn");
+  if(!wsOpen){e.textContent="host: disconnected";e.className="bad";}
+  else if(Date.now()-lastData<5000){e.textContent="● receiving from device";e.className="ok";}
+  else{e.textContent="host up — no device data";e.className="warn";}}
+
+function ws(){const p=location.protocol==="https:"?"wss:":"ws:";
+  const s=new WebSocket(`${p}//${location.host}/ws`);
+  s.onopen=()=>{wsOpen=true;setConn();};
+  s.onclose=()=>{wsOpen=false;setConn();setTimeout(ws,1500);};
+  s.onerror=()=>s.close();
+  s.onmessage=e=>{const m=JSON.parse(e.data);lastData=Date.now();
+    if(m.kind==="status")status=m;
+    else if(m.kind==="frame"){if(!paused){frames.unshift(m);if(frames.length>200)frames.pop();}}
+    else if(m.kind==="incident")loadIncidents();};}
+
+const j=u=>fetch(u).then(r=>r.json()).catch(()=>null);
+
+// Replace 0xXXXX short addresses in a summary with "Friendly name (0xXXXX)".
+function addrName(hex){hex=hex.toLowerCase();
+  if(hex==="0x0000")return "Coordinator";
+  if(hex==="0xffff")return "broadcast";
+  const d=devices.find(x=>x.addr===hex);return d&&d.name?d.name:null;}
+function annotate(s){return (s||"").replace(/0x[0-9a-fA-F]{4}/g,m=>{const n=addrName(m);return n?`${n} (${m})`:m;});}
+
+// Seed the live-frames table from the DB (the WS only carries frames that arrive
+// after the page loads — so without this, earlier captures show as an empty list).
+async function loadFrames(){const p=await j("/api/frames");if(!p)return;
+  const seen=new Set(frames.map(f=>f.ts+"/"+f.summary));
+  const seed=p.map(x=>({ts:x.ts,channel:x.channel,rssi:x.rssi,lqi:x.lqi,type:x.type,summary:x.summary,decrypted:x.decrypted}))
+    .filter(f=>!seen.has(f.ts+"/"+f.summary));
+  frames=frames.concat(seed).sort((a,b)=>b.ts-a.ts).slice(0,200);}
+
+async function loadDevices(){const d=await j("/api/devices");if(!d)return;devices=d;
+  document.getElementById("d-cnt").textContent=d.length;
+  document.getElementById("m-dev").textContent=d.length;
+  document.getElementById("devices").innerHTML=d.map(x=>{
+   const role=x.role==="coordinator"?'<span class="tag coord">coord</span>':(x.role?`<span class="tag">${x.role}</span>`:"");
+   const q=rssiQ(x.last_rssi);
+   const net=x.net_lqi!=null?`<span class="${lqiClass(x.net_lqi)}">${x.net_lqi}</span>`:'<span class=dim title="connect Home Assistant to see the network\'s view">—</span>';
+   const netr=x.net_rssi!=null?`${x.net_rssi}`:'<span class=dim>—</span>';
+   return `<tr class=click data-addr="${x.addr}"><td class=mono>${x.addr}</td><td>${x.name||""}</td><td>${role}</td>`+
+   `<td>${x.last_rssi??""}</td><td class="${qClass(q)}">${q!=null?q+"%":""}</td><td>${net}</td><td class=dim>${netr}</td><td>${x.count}</td>`+
+   `<td class=dim>${x.last_seen?ageStr(x.last_seen):""}</td></tr>`;}).join("")||
+   `<tr><td colspan=9 class=dim>no devices yet — is the channel right? click “Scan spectrum” to check noise.</td></tr>`;
+  bindRows();}
+
+async function loadRouting(){const r=await j("/api/routing");if(!r)return;routing=r;
+  document.getElementById("r-cnt").textContent=(r.edges||[]).length+" links";renderGraph();}
+async function loadIncidents(){const i=await j("/api/incidents");if(!i)return;
+  document.getElementById("i-cnt").textContent=i.length;
+  document.getElementById("incidents").innerHTML=i.map(x=>
+   `<tr><td class=dim>${Math.round(x.ts)}s</td><td class=mono>${x.addr}</td>`+
+   `<td class="${x.reason==='recovered'?'good':'weak'}">${x.reason}</td><td>${x.channel??""}</td>`+
+   `<td>${x.silent_s!=null?x.silent_s+'s':''}</td></tr>`).join("")||
+   `<tr><td colspan=5 class=dim>no incidents logged</td></tr>`;}
+let peakByCh={};
+const edValid=v=>v!=null&&v>-120;               // -128/-127 = no-data/err sentinels
+const edHeight=v=>edValid(v)?Math.max(2,Math.min(100,(v+100)*1.6)):3;
+const edClass=v=>!edValid(v)?"nodata":v>-60?"weak":v>-80?"fair":"good";
+const wifiOf={11:"W1",12:"W1",13:"W1",16:"W6",17:"W6",18:"W6",21:"W11",22:"W11",23:"W11"};
+async function loadSpectrum(){const s=await j("/api/spectrum");if(!s)return;
+  const ed={};s.forEach(x=>{if(ed[x.channel]==null)ed[x.channel]=x.ed_dbm;}); // samples are ts-desc → first=latest
+  let h="",wr="",anyValid=false,sawErr=false;
+  for(let c=11;c<=26;c++){const v=ed[c],ok=edValid(v);
+    if(ok){anyValid=true;peakByCh[c]=Math.max(peakByCh[c]??-200,v);}
+    if(v===-127)sawErr=true;
+    const pk=peakByCh[c];
+    const peak=(ok&&pk!=null&&edValid(pk))?`<div class=peak style="bottom:${edHeight(pk)}%"></div>`:"";
+    const lbl=ok?v:(v==null?"":"·");
+    h+=`<div class=bar>${peak}<div class=v>${lbl}</div><div class="fill ${edClass(v)}" style="height:${edHeight(v)}%"></div><span>${c}</span></div>`;
+    wr+=`<div class="wc ${wifiOf[c]?"on":""}">${wifiOf[c]||""}</div>`;}
+  document.getElementById("spectrum").innerHTML=h;
+  document.getElementById("wifirow").innerHTML=wr;
+  const st=document.getElementById("sp-status");
+  if(st)st.innerHTML=anyValid?"":Object.keys(ed).length
+    ?(sawErr?"⚠ energy-detect rejected by the radio (busy/bad state) — see device log":"⚠ energy-detect returned no data — reflash the latest firmware (symbol-units fix), then Scan")
+    :"hit “Scan once” or “Continuous”";
+  renderWaterfall(s);}
+function renderWaterfall(samples){
+  const cv=document.getElementById("waterfall"),ctx=cv.getContext("2d");
+  const W=cv.width,H=cv.height,cols=16,cw=W/cols;
+  // group by sweep_id → {channel: ed}
+  const sweeps=new Map();
+  samples.forEach(x=>{if(!sweeps.has(x.sweep_id))sweeps.set(x.sweep_id,{});sweeps.get(x.sweep_id)[x.channel]=x.ed_dbm;});
+  const ids=[...sweeps.keys()].sort((a,b)=>b-a).slice(0,60); // newest first
+  ctx.fillStyle="#080b0f";ctx.fillRect(0,0,W,H);
+  const rh=Math.max(2,H/Math.max(1,ids.length));
+  ids.forEach((id,row)=>{const sw=sweeps.get(id);
+    for(let c=11;c<=26;c++){const v=sw[c];
+      if(!edValid(v)){ctx.fillStyle="#0c0f14";ctx.fillRect((c-11)*cw,row*rh,cw,Math.ceil(rh));continue;}
+      const t=Math.max(0,Math.min(1,(v+100)/55)); // -100..-45 → 0..1
+      const r=Math.round(40+t*200),g=Math.round(180-t*150),b=Math.round(90-t*70);
+      ctx.fillStyle=`rgb(${r},${g},${b})`;ctx.fillRect((c-11)*cw,row*rh,cw,Math.ceil(rh));}});
+}
+async function loadDiagnostics(){const d=await j("/api/diagnostics");if(!d)return;
+  document.getElementById("dg-cnt").textContent=d.filter(x=>x.severity!=="info").length;
+  document.getElementById("diagnostics").innerHTML=d.map(x=>
+   `<div class="diag ${x.severity}"><span class=sev>${x.severity}</span><span class=cat>${x.category}</span>`+
+   `<span class=msg>${x.message}</span>${x.addr?`<span class="addr mono" data-addr="${x.addr}">${x.addr}</span>`:""}</div>`).join("");
+  document.querySelectorAll("#diagnostics .addr").forEach(a=>a.onclick=()=>showDetail(a.dataset.addr));}
+async function loadConn(){
+  const s=await j("/api/stats");const e=document.getElementById("connstats");
+  if(s){
+    const age=s.last_msg_age_ms,ageS=age==null||age<0?"never":(age/1000).toFixed(1)+"s ago";
+    let hint='<span class="good">receiving</span>';
+    if(!s.open)hint='<span class="weak">port not open — close other zbsniff instances; use the USB (native) port</span>';
+    else if(!(s.bytes>0))hint='<span class="weak">0 bytes — wrong connector? use USB not UART; or reset the C6</span>';
+    else if(!(s.msgs>0))hint='<span class="fair">bytes arriving but no valid frames — protocol mismatch; reflash the tethered firmware</span>';
+    e.innerHTML=`<span>port <b>${s.port||"—"}</b></span><span>open <b>${s.open?"yes":"no"}</b></span>`+
+      `<span>bytes <b>${s.bytes||0}</b></span><span>frames <b>${s.frames||0}</b></span>`+
+      `<span>status <b>${s.status||0}</b></span><span>ed <b>${s.ed||0}</b></span>`+
+      `<span>last <b>${ageS}</b></span> ${hint}`;
+    document.getElementById("cl-conn").textContent=s.open?(s.msgs>0?"live":"open, no data"):"closed";
+  }
+  const logs=await j("/api/logs");if(logs){const el=document.getElementById("loglines");
+    const atBottom=el.scrollHeight-el.scrollTop-el.clientHeight<30;
+    el.textContent=logs.slice(-120).join("\n");if(atBottom)el.scrollTop=el.scrollHeight;}
+}
+async function loadHAStatus(){const s=await j("/api/ha_status");if(!s)return;const e=document.getElementById("ha-stat");
+  if(s.connected){e.textContent=`HA: ${s.devices||0} devices`;e.className="tag ok";}
+  else if(s.error){e.textContent="HA error";e.className="tag err";e.title=s.error;}
+  else if(s.state==="connecting"){e.textContent="connecting…";e.className="tag";}
+  else{e.textContent="off";e.className="tag";}}
+
+function bindRows(){document.querySelectorAll("#devices tr.click").forEach(tr=>
+  tr.onclick=()=>showDetail(tr.dataset.addr));}
+
+// ---- routing graph: radial BFS from the coordinator, LQI-coloured edges ----
+// Force-directed routing graph (HA-style physics) with cached, stable positions.
+let rgScale=1,rgTx=0,rgTy=0,showLeaves=true,rgPos={},rgSig="";
+const RGCX=300,RGCY=170;
+let rgNodes=[],rgEdges=[],rgNameOf={},rgDeg={},rgAlpha=0,rgDirty=true,rgStarted=false;
+// renderGraph() now just (re)builds topology from `routing`; a continuous rAF
+// loop runs the physics and draws, so the layout is live and reacts to zoom.
+function renderGraph(){
+  const svg=document.getElementById("routing");
+  const adj=new Map(),nodes=new Set(),nameOf={},deg={};
+  (routing.nodes||[]).forEach(n=>{nodes.add(n.addr);nameOf[n.addr]=n.name;});
+  (routing.edges||[]).forEach(e=>{nodes.add(e.src);nodes.add(e.dst);
+    (adj.get(e.src)||adj.set(e.src,new Set()).get(e.src)).add(e.dst);
+    (adj.get(e.dst)||adj.set(e.dst,new Set()).get(e.dst)).add(e.src);});
+  if(!nodes.size){svg.innerHTML='<text x="300" y="170" fill="#8b97a3" text-anchor="middle">waiting for traffic…</text>';rgNodes=[];return;}
+  nodes.add(COORD);
+  for(const a of nodes)deg[a]=(adj.get(a)||new Set()).size;
+  let shown=new Set(nodes);
+  if(!showLeaves)shown=new Set([...nodes].filter(a=>a===COORD||deg[a]>1));
+  // Every endpoint with no observed link gets a dashed "parent unknown" line to
+  // the coordinator so nothing floats unconnected.
+  const edges=[];
+  (routing.edges||[]).forEach(e=>{if(shown.has(e.src)&&shown.has(e.dst))
+    edges.push({src:e.src,dst:e.dst,rssi:e.rssi,dashed:false});});
+  for(const a of shown){if(a!==COORD&&deg[a]===0)edges.push({src:a,dst:COORD,dashed:true});}
+  const arr=[...shown];
+  const sig=arr.slice().sort().join()+"|"+edges.map(e=>e.src+">"+e.dst).sort().join();
+  rgNodes=arr;rgEdges=edges;rgNameOf=nameOf;rgDeg=deg;
+  arr.forEach((a,i)=>{if(!rgPos[a]){const ang=i/arr.length*6.2832;
+    rgPos[a]={x:RGCX+Math.cos(ang)*110+(Math.random()-.5),y:RGCY+Math.sin(ang)*90,vx:0,vy:0};}});
+  Object.keys(rgPos).forEach(a=>{if(!arr.includes(a))delete rgPos[a];});
+  if(sig!==rgSig){rgSig=sig;rgReheat(1);}    // new topology → energise the sim
+  rgDirty=true;                              // always repaint so fresh names/RSSI show
+  if(!rgStarted){rgStarted=true;requestAnimationFrame(rgFrame);}
+}
+function rgReheat(a){rgAlpha=Math.max(rgAlpha,a);rgDirty=true;}
+function rgStep(){const N=rgNodes,P=rgPos;
+  for(let i=0;i<N.length;i++){const A=P[N[i]];A.vx*=0.6;A.vy*=0.6;}
+  for(let i=0;i<N.length;i++)for(let k=i+1;k<N.length;k++){
+    const A=P[N[i]],B=P[N[k]];let dx=A.x-B.x,dy=A.y-B.y,d2=dx*dx+dy*dy+0.01,d=Math.sqrt(d2);
+    const rep=2600/d2,fx=dx/d*rep,fy=dy/d*rep;A.vx+=fx;A.vy+=fy;B.vx-=fx;B.vy-=fy;}
+  rgEdges.forEach(e=>{const A=P[e.src],B=P[e.dst];if(!A||!B)return;
+    let dx=B.x-A.x,dy=B.y-A.y,d=Math.sqrt(dx*dx+dy*dy)+0.01,k=(d-80)*0.05,fx=dx/d*k,fy=dy/d*k;
+    A.vx+=fx;A.vy+=fy;B.vx-=fx;B.vy-=fy;});
+  N.forEach(a=>{const Q=P[a];Q.vx+=(RGCX-Q.x)*0.01;Q.vy+=(RGCY-Q.y)*0.015;
+    if(a!==COORD){Q.x+=Q.vx*rgAlpha*0.5;Q.y+=Q.vy*rgAlpha*0.5;}});
+  if(P[COORD]){P[COORD].x=RGCX;P[COORD].y=RGCY;P[COORD].vx=P[COORD].vy=0;}
+  rgAlpha*=0.97;
+}
+function rgFrame(){
+  if(rgAlpha>0.015){rgStep();rgStep();rgDirty=true;}
+  if(rgDirty){rgDraw();rgDirty=false;}
+  requestAnimationFrame(rgFrame);
+}
+function rgDraw(){const svg=document.getElementById("routing");if(!rgNodes.length)return;
+  const fs=(11/rgScale).toFixed(1),sw=(1.6/rgScale).toFixed(2);
+  let s="";
+  rgEdges.forEach(e=>{const a=rgPos[e.src],b=rgPos[e.dst];if(!a||!b)return;
+    const col=e.dashed?"#3a4452":qColor(rssiQ(e.rssi));
+    const dash=e.dashed?` stroke-dasharray="${(4/rgScale).toFixed(1)} ${(4/rgScale).toFixed(1)}"`:"";
+    s+=`<line x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}" stroke="${col}" stroke-width="${sw}"${dash} opacity=".6"/>`;});
+  for(const a of rgNodes){const p=rgPos[a];if(!p)continue;
+    const isC=a===COORD,leaf=rgDeg[a]<=1,r=(isC?9:(leaf?4.5:6.5))/Math.sqrt(rgScale),
+      fill=isC?"#58a6ff":(rgDeg[a]===0?"#f85149":(leaf?"#8b97a3":"#c9d4e0"));
+    const lbl=isC?"coordinator":(rgNameOf[a]||a);
+    s+=`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${r.toFixed(1)}" fill="${fill}" stroke="#0d1117" stroke-width="${sw}" data-addr="${a}"/>`;
+    s+=`<text x="${p.x.toFixed(1)}" y="${(p.y-r-3/rgScale).toFixed(1)}" font-size="${fs}" fill="#aeb9c4" text-anchor="middle">${lbl}</text>`;}
+  svg.innerHTML=`<g id="rg-g" transform="translate(${rgTx},${rgTy}) scale(${rgScale})">${s}</g>`;
+}
+function bindGraphZoom(){const svg=document.getElementById("routing");
+  // Delegated click (the SVG is rebuilt every frame, so per-node handlers won't do).
+  let moved=false;
+  svg.addEventListener("click",e=>{if(moved)return;const c=e.target.closest("circle[data-addr]");
+    if(c)showDetail(c.dataset.addr);});
+  svg.addEventListener("wheel",e=>{e.preventDefault();const f=e.deltaY<0?1.12:0.89;
+    const ns=Math.max(0.4,Math.min(6,rgScale*f));
+    const r=svg.getBoundingClientRect(),mx=(e.clientX-r.left)/r.width*600,my=(e.clientY-r.top)/r.height*340;
+    rgTx=mx-(mx-rgTx)*(ns/rgScale);rgTy=my-(my-rgTy)*(ns/rgScale);rgScale=ns;
+    rgReheat(0.4);},{passive:false}); // nudge the physics so it re-spaces as you zoom
+  let drag=null;
+  svg.addEventListener("mousedown",e=>{drag={x:e.clientX,y:e.clientY,tx:rgTx,ty:rgTy};moved=false;svg.style.cursor="grabbing";});
+  window.addEventListener("mousemove",e=>{if(!drag)return;const r=svg.getBoundingClientRect();
+    if(Math.abs(e.clientX-drag.x)+Math.abs(e.clientY-drag.y)>3)moved=true;
+    rgTx=drag.tx+(e.clientX-drag.x)/r.width*600;rgTy=drag.ty+(e.clientY-drag.y)/r.height*340;rgDirty=true;});
+  window.addEventListener("mouseup",()=>{drag=null;svg.style.cursor="grab";});}
+
+// ---- device detail drawer ----
+async function showDetail(addr){if(!addr||addr==="—")return;selected=addr;
+  const dev=devices.find(d=>d.addr===addr)||{addr};
+  document.getElementById("d-title").textContent=(dev.name?dev.name+" · ":"")+addr;
+  const msgs=await j(`/api/devices/${addr}/messages`)||[];
+  const ph=(await j(`/api/probe_history?addr=${addr}`))||{history:[]};
+  const phist=ph.history||[];
+  document.getElementById("dbody").innerHTML=
+   `<div class=kv><div>Address</div><div class=mono>${addr}</div>`+
+   `<div>Name</div><div>${dev.name||'<span class=dim>unknown — add --zha-backup or --ha-host</span>'}</div>`+
+   `<div>Role</div><div>${dev.role||'<span class=dim>?</span>'}</div>`+
+   `<div>Sniffer signal ⌖</div><div>${dev.last_rssi??'?'} dBm · <span class="${qClass(rssiQ(dev.last_rssi))}">${rssiQ(dev.last_rssi)!=null?rssiQ(dev.last_rssi)+'%':'?'}</span> <span class=dim>(heard at the sniffer's location)</span></div>`+
+   `<div>Network signal</div><div>${dev.net_lqi!=null?`LQI <span class="${lqiClass(dev.net_lqi)}">${dev.net_lqi}</span>${dev.net_rssi?' · '+dev.net_rssi+' dBm':''} <span class=dim>(coordinator's view of the real link)</span>`:'<span class=dim>— connect Home Assistant to see this</span>'}</div>`+
+   `<div>Raw sniffer LQI</div><div class=dim>${dev.last_lqi??'?'} <span class=dim>(C6 LQI reads low — prefer RSSI/quality)</span></div>`+
+   `<div>Frames seen</div><div>${dev.count??0}</div>`+
+   `<div>Channel</div><div>${dev.last_channel??'?'}</div></div>`+
+   `<h2 style="font-size:12px;color:var(--dim);text-transform:uppercase;display:flex;justify-content:space-between;align-items:center">Active test <button id="d-probe" style="font-size:11px;padding:2px 8px">Probe now ⚠</button></h2>`+
+   `<div class=dim style="font-size:11px;margin-bottom:6px">An ACK proves the device's radio is alive & on-channel right now — useful to confirm a "dropped" device. RSSI here is from the probing radio.</div>`+
+   `<table><thead><tr><th>Time</th><th>Radio</th><th>Result</th><th>RSSI⌖</th></tr></thead><tbody id="d-probes">`+
+   phist.slice(0,12).map(h=>`<tr><td class=dim>${fmtTime(h.ts)}</td><td>${h.radio}</td><td class="${h.acked?'good':'weak'}">${h.acked?'✓ ACK':'✗ no ACK'}</td><td>${h.acked?h.rssi:''}</td></tr>`).join("")+
+   (phist.length?'':'<tr><td colspan=4 class=dim>no probes yet — hit “Probe now”</td></tr>')+`</tbody></table>`+
+   `<h2 style="font-size:12px;color:var(--dim);text-transform:uppercase;margin-top:14px">Recent messages (${msgs.length})</h2>`+
+   `<table><thead><tr><th>Time</th><th>RSSI</th><th>Type</th><th>Summary</th></tr></thead><tbody>`+
+   msgs.map(m=>`<tr><td class=dim>${fmtTime(m.ts)}</td><td>${m.rssi}</td><td>${m.type}${m.decrypted?' <span class=lock>🔓</span>':''}</td><td>${annotate(m.summary)}</td></tr>`).join("")+
+   `</tbody></table>`;
+  const pb=document.getElementById("d-probe");
+  if(pb)pb.onclick=async()=>{const p=document.getElementById("at-radio")?document.getElementById("at-radio").value:"";
+    if(!p&&!await gateFn("probe"))return;
+    post(`/api/probe?addr=${addr}${p?'&port='+encodeURIComponent(p):''}`).then(()=>setTimeout(()=>showDetail(addr),700));};
+  document.getElementById("drawer").classList.add("open");}
+document.getElementById("dclose").onclick=()=>{document.getElementById("drawer").classList.remove("open");selected=null;};
+
+function render(){setConn();
+  if(status){document.getElementById("m-ch").textContent=status.channel;
+    document.getElementById("m-cap").textContent=status.captured;
+    document.getElementById("m-drop").textContent=status.dropped_buf;}
+  renderStatus();
+  document.getElementById("frames").innerHTML=frames.slice(0,80).map(f=>
+   `<tr><td class=dim>${fmtTime(f.ts)}</td><td>${f.channel}</td><td>${f.rssi}</td><td class="${lqiClass(f.lqi)}">${f.lqi}</td>`+
+   `<td>${f.type}${f.decrypted?' <span class=lock>🔓</span>':''}</td><td>${annotate(f.summary)}</td></tr>`).join("");
+  updateCapInd();
+}
+
+let capPrev=-1,capActiveTs=0,capStopped=false;
+function updateCapInd(){
+  const s=status||{},mode=s.mode_id,cap=s.captured??0;
+  if(capPrev>=0&&cap>capPrev){capActiveTs=Date.now();capStopped=false;}
+  capPrev=cap;
+  const active=Date.now()-capActiveTs<4000;
+  let cls="idle",txt="■ idle";
+  if(capStopped){cls="idle";txt="■ stopped";}
+  else if(mode===0){cls="idle";txt="■ idle";}
+  else if(mode===2){cls="sweep";txt="◐ ED sweep";}
+  else if(mode===1||mode===3){if(active){cls="run";txt=`capturing · ch ${s.channel??"?"}`;}
+    else{cls="quiet";txt="capture mode · no new frames";}}
+  // Drive both the panel badge and the always-visible header badge, so capture
+  // status is shown on every tab (capture runs device-side and never stops on a
+  // tab switch — only Stop ends it).
+  for(const id of ["cap-ind","cap-ind-hdr"]){const el=document.getElementById(id);
+    if(el){el.className="capind "+cls;el.textContent=txt;}}}
+
+// Server-driven radio allocation gate. Asks which radio would run `fn`; alerts
+// when none is free (listing what each radio is doing), confirms when the only
+// candidate is mid-task (single-radio interrupt).
+async function gateFn(fn){const a=await j("/api/allocate?fn="+fn);
+  if(!a)return true;
+  if(!a.ok){alert("⚠ "+(a.reason||("No radio is free for "+fn)));return false;}
+  if(a.interrupt&&!confirm("⚠ "+a.reason))return false;
+  return true;}
+
+function togglePause(){paused=!paused;
+  const b=document.getElementById("pause2");b.classList.toggle("on",paused);b.textContent=paused?"▶ paused":"⏸";}
+const post=u=>fetch(u,{method:"POST"});
+const on=(id,fn)=>document.getElementById(id).onclick=fn;
+on("c-start",async()=>{if(!await gateFn("capture"))return;capStopped=false;post("/api/start");});
+on("c-stop",()=>{capStopped=true;updateCapInd();post("/api/stop");});
+on("c-restart",async()=>{if(!await gateFn("capture"))return;capStopped=false;post("/api/start");});
+on("c-reset",()=>post("/api/reset_radio"));
+on("c-scan",async()=>{if(!await gateFn("spectrum"))return;post("/api/scan");});
+on("c-setch",()=>{const v=+document.getElementById("c-ch").value;if(v>=11&&v<=26)post("/api/set_channel?ch="+v);});
+on("c-hop",()=>{const d=+document.getElementById("c-dwell").value||0;post("/api/hop?dwell="+d);});
+on("c-setkey",()=>{const k=document.getElementById("c-key").value.trim();post("/api/key?k="+encodeURIComponent(k));});
+on("c-clearkey",()=>{document.getElementById("c-key").value="";post("/api/key?k=");});
+document.getElementById("c-mode").onchange=async e=>{const v=+e.target.value;
+  const act=(v===2)?"spectrum":(v===1||v===3)?"capture":null;
+  if(act&&!await gateFn(act)){e.target.value=status?status.mode_id:1;return;}
+  post("/api/mode?m="+v);};
+on("sp-scan",async()=>{if(!await gateFn("spectrum"))return;const d=+document.getElementById("sp-dwell").value||20;post("/api/scan?dwell="+d);});
+let spCont=false;
+on("sp-cont",async()=>{if(!spCont&&!await gateFn("spectrum"))return;spCont=!spCont;const b=document.getElementById("sp-cont");
+  b.classList.toggle("on",spCont);b.textContent=spCont?"Stop continuous":"Continuous";
+  post("/api/mode?m="+(spCont?2:1));});
+on("sp-peakclear",()=>{peakByCh={};});
+on("c-savekey",()=>post("/api/save_key"));
+document.querySelectorAll("[data-exp]").forEach(b=>b.onclick=()=>{
+  const fmt=document.getElementById("exp-fmt").value;
+  window.open(`/api/export?what=${b.dataset.exp}&format=${fmt}`,"_blank");});
+on("rg-leaves",()=>{showLeaves=!showLeaves;
+  document.getElementById("rg-leaves").classList.toggle("on",showLeaves);renderGraph();});
+on("rg-reset",()=>{rgScale=1;rgTx=0;rgTy=0;rgReheat(0.6);});
+on("ha-connect",()=>{const h=document.getElementById("ha-host").value.trim(),t=document.getElementById("ha-token").value.trim();
+  if(h&&t)fetch(`/api/ha_connect?host=${encodeURIComponent(h)}&token=${encodeURIComponent(t)}`,{method:"POST"});});
+on("raw-send",()=>{let r=document.getElementById("raw-type").value.trim();
+  const t=r.toLowerCase().startsWith("0x")?parseInt(r,16):parseInt(r,10);if(isNaN(t))return;
+  const h=document.getElementById("raw-hex").value.trim();
+  fetch(`/api/raw?type=${t}&hex=${encodeURIComponent(h)}`,{method:"POST"});});
+document.getElementById("pause2").onclick=togglePause;
+function renderStatus(){
+  const s=status||{};
+  const dec=s.decrypt;
+  const ds=document.getElementById("c-decstat");ds.textContent=dec?"decrypting":"off";ds.classList.toggle("on",!!dec);
+  document.getElementById("m-dec").style.display=dec?"inline":"none";
+  if(s.fw!==undefined){
+    document.getElementById("devstatus").innerHTML=
+     `<span>mode <b>${s.mode||"?"}</b></span><span>radio <b>${s.radio??0}</b></span>`+
+     `<span>fw <b>${s.fw}</b></span><span>uptime <b>${s.uptime_s??0}s</b></span>`+
+     `<span>hop <b>${s.hop_dwell_ms?s.hop_dwell_ms+"ms":"off"}</b></span>`+
+     `<span>captured <b>${s.captured??0}</b></span><span>dropped <b>${s.dropped_buf??0}</b></span>`;
+    if(s.mode_id!=null)document.getElementById("c-mode").value=s.mode_id;
+  }
+}
+
+let atRadios=[];
+async function loadActive(){
+  const r=await j("/api/radios");
+  if(r){atRadios=r.radios||[];
+    const sel=document.getElementById("at-radio"),cur=sel.value;
+    sel.innerHTML='<option value="">any radio</option>'+atRadios.map(x=>`<option value="${x.port}">radio ${x.radio_id} · ch${x.channel} · …${x.port.slice(-6)}</option>`).join("");
+    sel.value=cur;
+    document.getElementById("at-pan").textContent=r.pan?("PAN "+r.pan):"PAN unknown — load a ZHA backup or pass --pan";
+    document.getElementById("at-radios").innerHTML=atRadios.length
+      ?("radios: "+atRadios.map(x=>`<b>${x.port.slice(-8)}</b> id ${x.radio_id}, ch ${x.channel}, ${x.frames} frm, ${x.probes} probes`).join(" &nbsp;·&nbsp; "))
+      :"no radios connected yet";}
+  const sc=await j("/api/schedules");
+  document.getElementById("at-sched").innerHTML=((sc&&sc.schedules)||[]).map(s=>{
+    const rate=s.runs?Math.round(s.acks/s.runs*100):null;
+    return `<tr><td class=mono>${s.target}</td><td>${s.interval_s}s</td><td>${s.runs}</td><td class="${rate==null?'dim':rate>=90?'good':rate>=50?'fair':'weak'}">${s.acks}${rate!=null?' ('+rate+'%)':''}</td><td><button data-delsched="${s.id}" style="font-size:10px;padding:1px 6px">✕</button></td></tr>`;
+  }).join("")||'<tr><td colspan=5 class=dim>no schedules — add one above</td></tr>';
+  const ph=await j("/api/probe_history");
+  document.getElementById("at-results").innerHTML=((ph&&ph.history)||[]).slice(0,40).map(h=>
+    `<tr><td class=dim>${fmtTime(h.ts)}</td><td class=mono>${h.target}</td><td>${h.radio}</td><td class="${h.acked?'good':'weak'}">${h.acked?'✓ ACK':'✗ no ACK'}</td><td>${h.acked?h.rssi:''}</td></tr>`).join("")
+    ||'<tr><td colspan=5 class=dim>no probes yet</td></tr>';
+}
+async function loadRadios(){const r=await j("/api/radios");if(!r)return;
+  const rs=r.radios||[],roleOpts=r.roles||[];
+  const ids={};rs.forEach(x=>{if(x.radio_id>=0)ids[x.radio_id]=(ids[x.radio_id]||0)+1;});
+  const dup=Object.keys(ids).filter(k=>ids[k]>1);
+  document.getElementById("radios-note").innerHTML=rs.length
+    ?(dup.length?`⚠ radios share id ${dup.join(", ")} — give each a unique ID so roles target the right one`
+      :`${rs.length} radio(s) connected · roles applied live and saved to the config`)
+    :"no radios connected — plug in up to 4 C6 dongles (pass --port for each)";
+  document.getElementById("radios-tbl").innerHTML=rs.map(x=>{
+    const cur=x.role||"any";
+    const roleCell=x.radio_id<0?'<span class=dim>identifying…</span>'
+      :`<select class=rrole data-id="${x.radio_id}">`+
+        roleOpts.map(o=>`<option value="${o}"${cur===o?" selected":""}>${o}</option>`).join("")+`</select>`;
+    return `<tr><td class=mono title="${x.port}">…${x.port.slice(-12)}</td>`+
+      `<td><input class=rid type=number min=0 max=3 value="${x.radio_id<0?0:x.radio_id}" style="width:44px">`+
+      `<button class=ridset data-port="${x.port}" style="font-size:10px;padding:1px 6px;margin-left:4px">set</button></td>`+
+      `<td>${roleCell}</td><td>${x.channel<0?'—':x.channel}</td><td>${x.frames}</td><td>${x.probes}</td>`+
+      `<td class=dim>${x.last_seen?ageStr(x.last_seen):''}</td></tr>`;}).join("")
+    ||'<tr><td colspan=7 class=dim>no radios</td></tr>';
+}
+document.getElementById("radios-tbl").addEventListener("change",e=>{
+  const s=e.target.closest("select.rrole");
+  if(s)post(`/api/radio_role?radio=${s.dataset.id}&role=${s.value}`).then(()=>setTimeout(loadRadios,400));});
+document.getElementById("radios-tbl").addEventListener("click",e=>{
+  const b=e.target.closest("button.ridset");if(!b)return;
+  const inp=b.parentElement.querySelector("input.rid");
+  post(`/api/set_radio_id?port=${encodeURIComponent(b.dataset.port)}&id=${inp.value}`).then(()=>setTimeout(loadRadios,700));});
+on("at-probe",async()=>{const a=document.getElementById("at-addr").value.trim();if(!a)return;
+  const p=document.getElementById("at-radio").value;
+  if(!p&&!await gateFn("probe"))return;
+  post(`/api/probe?addr=${encodeURIComponent(a)}${p?'&port='+encodeURIComponent(p):''}`).then(()=>setTimeout(loadActive,700));});
+on("at-schedule",()=>{const a=document.getElementById("at-addr").value.trim();if(!a)return;
+  const iv=+document.getElementById("at-interval").value||60,p=document.getElementById("at-radio").value;
+  post(`/api/schedules?addr=${encodeURIComponent(a)}&interval=${iv}${p?'&port='+encodeURIComponent(p):''}`).then(loadActive);});
+document.getElementById("at-sched").onclick=e=>{const b=e.target.closest("[data-delsched]");
+  if(b)fetch("/api/schedules?id="+b.dataset.delsched,{method:"DELETE"}).then(loadActive);};
+
+function showTab(t){
+  document.querySelectorAll(".tabbtn").forEach(b=>b.classList.toggle("on",b.dataset.t===t));
+  document.querySelectorAll(".grid > .panel").forEach(p=>{const tab=p.dataset.tab;
+    p.style.display=tab?(tab===t?"":"none"):(t==="overview"?"":"none");});
+  if(t==="spectrum")loadSpectrum();
+  if(t==="active")loadActive();
+  if(t==="config")loadRadios();
+  if(t==="frames")loadFrames();
+  if(t==="about")loadAbout();
+}
+async function loadAbout(){const a=await j("/api/about");if(!a)return;
+  const order=[["app","Application"],["version","Host version"],["author","Author"],
+    ["build_date","Build date"],["commit","Commit"],["dirty","Working tree"],
+    ["go","Go runtime"],["platform","Platform"],["proto_ver","Wire protocol"],["fw","Device firmware"]];
+  a.fw=(status&&status.fw)?("v"+status.fw):"—";
+  a.dirty=a.dirty?"modified":undefined;
+  document.getElementById("about-body").innerHTML=order.filter(([k])=>a[k]!=null&&a[k]!=="")
+    .map(([k,label])=>`<div>${label}</div><div class=mono>${a[k]}</div>`).join("");}
+document.querySelectorAll(".tabbtn").forEach(b=>b.onclick=()=>showTab(b.dataset.t));
+showTab("overview");
+
+// ---- display theme (day/night/auto), persisted in localStorage ----
+const mq=window.matchMedia("(prefers-color-scheme: light)");
+function applyTheme(t){const light=(t==="day")||(t==="auto"&&mq.matches);
+  document.body.classList.toggle("light",light);}
+function setTheme(t){localStorage.setItem("zbtheme",t);applyTheme(t);
+  const s=document.getElementById("theme-sel");if(s)s.value=t;}
+{const t=localStorage.getItem("zbtheme")||"night";setTheme(t);}
+document.getElementById("theme-sel").onchange=e=>setTheme(e.target.value);
+mq.addEventListener("change",()=>{if((localStorage.getItem("zbtheme")||"night")==="auto")applyTheme("auto");});
+on("c-reconnect",()=>post("/api/reconnect"));
+
+ws();bindGraphZoom();loadActive();loadFrames();
+setInterval(()=>{loadDevices();loadRouting();loadIncidents();loadSpectrum();loadDiagnostics();loadHAStatus();loadConn();loadActive();loadRadios();if(selected)showDetail(selected);},3000);
+setInterval(loadConn,1000);
+setInterval(render,500);
+loadDevices();loadRouting();loadIncidents();loadSpectrum();loadDiagnostics();loadHAStatus();loadConn();
+</script>
+</body>
+</html>

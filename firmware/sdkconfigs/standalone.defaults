@@ -1,0 +1,16 @@
+# standalone profile overrides (applied on top of sdkconfig.defaults).
+#
+# Console on UART0 → the on-board USB-UART bridge ("UART" port). This is more
+# reliable than USB-Serial/JTAG for logs/panics (the bridge stays enumerated
+# across chip resets, so boot loops and crash backtraces are captured), and
+# standalone doesn't use the native USB for data anyway. Watch the "UART" port.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+# CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG is not set
+
+# WiFi + HTTP server + WebSocket (WS is NOT default-on in IDF — required here).
+CONFIG_ESP_WIFI_ENABLED=y
+CONFIG_ESP_WIFI_SOFTAP_SUPPORT=y
+CONFIG_HTTPD_WS_SUPPORT=y
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y

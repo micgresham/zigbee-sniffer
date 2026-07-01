@@ -1,0 +1,5 @@
+# satellite profile overrides (applied on top of sdkconfig.defaults).
+# Console on UART0; SPI is the data path to the primary (not USB).
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+# CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG is not set
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y

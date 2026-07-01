@@ -1,0 +1,41 @@
+# Home Assistant add-on manifest.
+# Install by adding this repo as a custom add-on repository in the Supervisor.
+name: Zigbee Sniffer & Diagnostics
+version: "0.1.0"
+slug: zbsniff
+description: >-
+  Passive Zigbee/802.15.4 sniffer & diagnostics — device discovery, routing tree,
+  RF spectrum/interference, and incident logging for unresponsive-device problems.
+url: https://github.com/your/zigbee-sniffer
+arch:
+  - aarch64
+  - amd64
+  - armv7
+  - armhf
+init: false
+startup: application
+boot: auto
+# Expose the web UI through HA's ingress (sidebar panel).
+ingress: true
+ingress_port: 8080
+panel_icon: mdi:access-point-network
+panel_title: Zigbee Sniffer
+# Allow mapping the sniffer USB dongle(s) through to the container.
+uart: true
+usb: true
+hassio_api: true
+homeassistant_api: true
+options:
+  serial_ports:
+    - /dev/ttyACM0
+  channel: 15
+  network_key: ""
+  decrypt: false
+  silence_threshold_s: 120
+schema:
+  serial_ports:
+    - str
+  channel: int(11,26)
+  network_key: str?
+  decrypt: bool
+  silence_threshold_s: int(5,3600)

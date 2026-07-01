@@ -1,0 +1,30 @@
+# Plain-Docker / dev deployment (non-HA hosts). Same image as the HA add-on.
+#   cd addon && docker compose up --build
+# Build context is the repo root so host/ and frontend/dist are included.
+services:
+  zbsniff:
+    build:
+      context: ..
+      dockerfile: addon/Dockerfile
+    image: zbsniff:latest
+    container_name: zbsniff
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      ZB_CHANNEL: "15"
+      # ZB_NETWORK_KEY: "<32 hex chars>"   # uncomment to enable decryption
+      ZB_DB: /data/zbsniff.sqlite
+      ZB_HTTP_PORT: "8080"
+    volumes:
+      - zbsniff-data:/data
+    devices:
+      # Map your sniffer dongle(s) — adjust to your host paths.
+      - "/dev/ttyACM0:/dev/ttyACM0"
+    # run.sh reads /data/options.json (HA) or env (compose); pass ports via env:
+    command: >-
+      python -m zbsniff.api.server --port /dev/ttyACM0 --channel 15
+      --db /data/zbsniff.sqlite --http-port 8080
+
+volumes:
+  zbsniff-data:

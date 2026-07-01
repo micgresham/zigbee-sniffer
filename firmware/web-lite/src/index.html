@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zigbee Sniffer</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+  <h1>Zigbee Sniffer</h1>
+  <span id="conn" class="bad">disconnected</span>
+  <span id="status"></span>
+</header>
+
+<div class="controls">
+  <label>Channel <input id="chInput" type="number" min="11" max="26" value="15"></label>
+  <button id="chSet">Set</button>
+  <button id="capBtn">Capture</button>
+  <button id="edBtn">Spectrum scan</button>
+</div>
+
+<div class="grid">
+  <div class="panel">
+    <h2>Devices in range</h2>
+    <table>
+      <thead><tr><th>Address</th><th>Ch</th><th>RSSI</th><th>LQI</th><th>#</th><th>Seen</th></tr></thead>
+      <tbody id="devices"></tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>RF spectrum (energy per channel 11–26)</h2>
+    <div id="spectrum"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Routing tree → coordinator (edges by LQI)</h2>
+    <svg id="routing" viewBox="0 0 460 300" preserveAspectRatio="xMidYMid meet"></svg>
+  </div>
+
+  <div class="panel">
+    <h2>Incidents (dropouts logged on-device)</h2>
+    <table class="frames">
+      <thead><tr><th>When</th><th>Device</th><th>Reason</th><th>RSSI/LQI</th><th>Energy</th><th>Silent</th></tr></thead>
+      <tbody id="incidents"></tbody>
+    </table>
+  </div>
+
+  <div class="panel wide">
+    <h2>Recent frames</h2>
+    <table class="frames">
+      <thead><tr><th>Ch</th><th>RSSI</th><th>LQI</th><th>Type</th><th>Summary</th></tr></thead>
+      <tbody id="frames"></tbody>
+    </table>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

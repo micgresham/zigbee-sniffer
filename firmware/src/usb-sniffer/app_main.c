@@ -1,0 +1,246 @@
+// app_main.c (usb-sniffer build) — the "true sniffer".
+//
+// Streams captured 802.15.4 frames and energy-detect samples to the host over
+// USB Serial/JTAG using the shared framing protocol, and accepts commands
+// (set channel, mode, hop, ED scan...) back from the host.
+//
+// All build dirs compile in every env (see src/CMakeLists.txt); this guard
+// keeps only the selected build's app_main() active.
+#if defined(BUILD_USB_SNIFFER)
+
+#include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
+#include "esp_timer.h"
+
+#include "proto.h"
+#include "codec.h"
+#include "config_nvs.h"
+#include "radio_capture.h"
+#include "ed_scan.h"
+#include "probe.h"
+#include "transport_usb.h"
+
+static const char *TAG = "usb-sniffer";
+
+static device_config_t s_cfg;
+static volatile uint8_t s_mode;
+static volatile uint32_t s_hop_mask;
+static volatile uint16_t s_hop_dwell_ms;
+static uint64_t s_boot_us;
+
+// --- helpers ---------------------------------------------------------------
+
+static void send_frame(uint8_t type, const uint8_t *payload, uint16_t len)
+{
+    uint8_t out[ZB_MAX_TX];
+    size_t n = zb_encode(type, payload, len, out, sizeof(out));
+    if (n) transport_usb_write(out, n);
+}
+
+static void send_log(const char *msg)
+{
+    send_frame(MSG_LOG, (const uint8_t *)msg, (uint16_t)strlen(msg));
+}
+
+static void send_ack(uint8_t cmd_type, uint8_t result)
+{
+    uint8_t p[2] = { cmd_type, result };
+    send_frame(MSG_ACK, p, 2);
+}
+
+static void send_status(void)
+{
+    uint8_t p[32];
+    size_t n = 0;
+    uint32_t uptime = (uint32_t)((esp_timer_get_time() - s_boot_us) / 1000000ULL);
+    p[n++] = s_cfg.radio_id;
+    p[n++] = s_mode;
+    p[n++] = radio_capture_get_channel();
+    for (int i = 0; i < 4; i++) p[n++] = (uint8_t)(s_hop_mask >> (8 * i));
+    p[n++] = (uint8_t)(s_hop_dwell_ms & 0xFF);
+    p[n++] = (uint8_t)(s_hop_dwell_ms >> 8);
+    for (int i = 0; i < 4; i++) p[n++] = (uint8_t)(uptime >> (8 * i));
+    uint32_t cap = radio_capture_count();
+    for (int i = 0; i < 4; i++) p[n++] = (uint8_t)(cap >> (8 * i));
+    uint32_t dcrc = 0;  // hardware filters CRC in promiscuous; reserved
+    for (int i = 0; i < 4; i++) p[n++] = (uint8_t)(dcrc >> (8 * i));
+    uint32_t dbuf = radio_capture_dropped_buf();
+    for (int i = 0; i < 4; i++) p[n++] = (uint8_t)(dbuf >> (8 * i));
+    p[n++] = FW_MAJOR;
+    p[n++] = FW_MINOR;
+    send_frame(MSG_STATUS, p, (uint16_t)n);
+}
+
+static void ed_cb(const ed_sample_t *s, void *ctx)
+{
+    (void)ctx;
+    uint8_t p[16];
+    size_t n = 0;
+    p[n++] = s_cfg.radio_id;
+    p[n++] = s->channel;
+    for (int i = 0; i < 8; i++) p[n++] = (uint8_t)(s->timestamp >> (8 * i));
+    p[n++] = (uint8_t)s->ed_dbm;
+    p[n++] = (uint8_t)(s->sweep_id & 0xFF);
+    p[n++] = (uint8_t)(s->sweep_id >> 8);
+    send_frame(MSG_ED_RESULT, p, (uint16_t)n);
+}
+
+// Active-probe result → MSG_PROBE_RESULT.
+static void probe_cb(uint16_t target, bool acked, int8_t rssi, uint8_t lqi)
+{
+    uint8_t p[6];
+    p[0] = s_cfg.radio_id;
+    p[1] = target & 0xFF;
+    p[2] = target >> 8;
+    p[3] = acked ? 1 : 0;
+    p[4] = (uint8_t)rssi;
+    p[5] = lqi;
+    send_frame(MSG_PROBE_RESULT, p, sizeof(p));
+}
+
+// --- command handling ------------------------------------------------------
+
+static void handle_command(uint8_t type, const uint8_t *p, uint16_t len)
+{
+    switch (type) {
+    case CMD_SET_CHANNEL:
+        if (len >= 1) { radio_capture_set_channel(p[0]); s_cfg.channel = p[0]; config_save(&s_cfg); }
+        send_ack(type, 0);
+        break;
+    case CMD_SET_MODE:
+        if (len >= 1) s_mode = p[0];
+        send_ack(type, 0);
+        break;
+    case CMD_START:
+        radio_capture_start();
+        send_ack(type, 0);
+        break;
+    case CMD_STOP:
+        radio_capture_stop();
+        send_ack(type, 0);
+        break;
+    case CMD_SET_HOP:
+        if (len >= 6) {
+            s_hop_mask = (uint32_t)p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24);
+            s_hop_dwell_ms = (uint16_t)p[4] | (p[5] << 8);
+        }
+        send_ack(type, 0);
+        break;
+    case CMD_ED_SCAN:
+        if (len >= 6) {
+            uint32_t mask = (uint32_t)p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24);
+            uint32_t dwell_ms = (uint16_t)p[4] | (p[5] << 8);
+            ed_sweep(mask, dwell_ms * 1000, ed_cb, NULL);
+        }
+        send_ack(type, 0);
+        break;
+    case CMD_SET_KEY:
+        if (len >= 1 && p[0] && len >= 17) {
+            s_cfg.key_present = true;
+            memcpy(s_cfg.nwk_key, &p[1], 16);
+            config_save(&s_cfg);
+        }
+        send_ack(type, 0);
+        break;
+    case CMD_SET_RADIO_ID:
+        if (len >= 1) { s_cfg.radio_id = p[0]; config_save(&s_cfg); }
+        send_ack(type, 0);
+        break;
+    case CMD_PROBE:
+        if (len >= 4) {
+            uint16_t target = (uint16_t)p[0] | (p[1] << 8);
+            uint16_t pan    = (uint16_t)p[2] | (p[3] << 8);
+            probe_send(target, pan);
+        }
+        send_ack(type, 0);
+        break;
+    case CMD_GET_STATUS:
+        send_status();
+        break;
+    default:
+        send_ack(type, 1);  // unknown command
+        break;
+    }
+}
+
+static void command_task(void *arg)
+{
+    (void)arg;
+    static zb_decoder_t dec;   // ~2 KB — keep off the task stack
+    zb_decoder_init(&dec);
+    uint8_t buf[128];
+    for (;;) {
+        int n = transport_usb_read(buf, sizeof(buf), 50);
+        for (int i = 0; i < n; i++) {
+            uint8_t type; const uint8_t *pl; uint16_t pl_len;
+            if (zb_decoder_push(&dec, buf[i], &type, &pl, &pl_len)) {
+                handle_command(type, pl, pl_len);
+            }
+        }
+    }
+}
+
+void app_main(void)
+{
+    s_boot_us = esp_timer_get_time();
+    config_load(&s_cfg);
+    s_mode = s_cfg.mode;
+    s_hop_mask = s_cfg.hop_mask;
+    s_hop_dwell_ms = s_cfg.hop_dwell_ms;
+
+    transport_usb_init();
+    radio_capture_init(s_cfg.channel, s_cfg.radio_id);
+    radio_capture_start();
+    probe_init(probe_cb);
+
+    ESP_LOGI(TAG, "usb-sniffer up: ch=%u radio=%u", s_cfg.channel, s_cfg.radio_id);
+    send_log("zigbee-sniffer usb-sniffer ready");
+
+    xTaskCreate(command_task, "cmd", 4096, NULL, 5, NULL);
+
+    uint8_t out[ZB_MAX_TX];
+    captured_frame_t cf;
+    uint64_t last_status = esp_timer_get_time();
+    uint64_t last_hop = last_status;
+    uint8_t hop_idx = 0;
+
+    for (;;) {
+        // Drain captured frames (CAPTURE / CAPTURE_PLUS_ED modes).
+        if (s_mode == MODE_CAPTURE || s_mode == MODE_CAPTURE_PLUS_ED) {
+            while (radio_capture_recv(&cf, 5)) {
+                size_t n = zb_encode_captured(s_cfg.radio_id, &cf, out, sizeof(out));
+                if (n) transport_usb_write(out, n);
+            }
+        } else if (s_mode == MODE_ED_SWEEP) {
+            ed_sweep(s_hop_mask, (s_hop_dwell_ms ? s_hop_dwell_ms : 5) * 1000, ed_cb, NULL);
+            vTaskDelay(pdMS_TO_TICKS(50));
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
+
+        uint64_t now = esp_timer_get_time();
+
+        // Channel hopping during capture.
+        if (s_hop_dwell_ms && (s_mode == MODE_CAPTURE) &&
+            (now - last_hop) / 1000 >= s_hop_dwell_ms) {
+            last_hop = now;
+            for (int tries = 0; tries < 16; tries++) {
+                hop_idx = (hop_idx + 1) % 16;
+                if (s_hop_mask & (1u << hop_idx)) {
+                    radio_capture_set_channel(ZB_CHANNEL_MIN + hop_idx);
+                    break;
+                }
+            }
+        }
+
+        // Periodic status heartbeat (~1 Hz).
+        if (now - last_status >= 1000000ULL) {
+            last_status = now;
+            send_status();
+        }
+    }
+}
+
+#endif // BUILD_USB_SNIFFER

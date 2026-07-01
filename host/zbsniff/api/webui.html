@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zigbee Sniffer — Tethered</title>
+<style>
+:root{--bg:#0e1116;--panel:#171c24;--line:#2a3340;--fg:#dfe6ee;--dim:#7b8794;
+--good:#3fb950;--fair:#d29922;--weak:#f85149;--accent:#58a6ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);
+font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--panel);
+border-bottom:1px solid var(--line);flex-wrap:wrap}
+header h1{font-size:16px;margin:0;font-weight:650}
+#conn{font-size:12px;padding:2px 8px;border-radius:10px}
+#conn.ok{background:#11331c;color:var(--good)}#conn.bad{background:#3a1414;color:var(--weak)}
+#status{color:var(--dim);font-size:12px;margin-left:auto}#status b{color:var(--fg)}
+.controls{display:flex;gap:8px;padding:10px 16px;align-items:center;flex-wrap:wrap}
+.controls input{width:56px;background:#0b0e13;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:5px}
+button{background:#20283280;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 12px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:0 16px 16px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;min-width:0}
+.panel h2{font-size:13px;margin:0 0 8px;color:var(--dim);text-transform:uppercase;letter-spacing:.04em}
+.panel.wide{grid-column:1/-1}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:4px 6px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--dim);font-weight:500}
+.good{color:var(--good)}.fair{color:var(--fair)}.weak{color:var(--weak)}.dim{color:var(--dim)}
+.scroll{max-height:300px;overflow:auto;display:block}
+#spectrum{display:flex;align-items:flex-end;gap:4px;height:150px}
+.bar{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%}
+.bar .fill{width:100%;border-radius:3px 3px 0 0;background:var(--accent);min-height:2px}
+.bar .fill.good{background:var(--good)}.bar .fill.fair{background:var(--fair)}
+.bar .fill.weak{background:var(--weak)}.bar .fill.dim{background:#2a3340}
+.bar span{font-size:10px;color:var(--dim);margin-top:3px}
+@media(max-width:780px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Zigbee Sniffer — Tethered (USB)</h1>
+  <span id="conn" class="bad">disconnected</span>
+  <span id="status"></span>
+</header>
+<div class="controls">
+  <label>Channel <input id="ch" type="number" min="11" max="26" value="15"></label>
+  <button id="setch">Set channel</button>
+  <span class="dim">set this to your Home Assistant Zigbee channel</span>
+</div>
+<div class="grid">
+  <div class="panel"><h2>Devices in range</h2>
+    <table><thead><tr><th>Address</th><th>Name</th><th>Role</th><th>Ch</th><th>RSSI</th><th>LQI</th><th>#</th></tr></thead>
+    <tbody id="devices"></tbody></table></div>
+  <div class="panel"><h2>RF spectrum (energy per channel 11–26)</h2><div id="spectrum"></div></div>
+  <div class="panel"><h2>Incidents (dropouts)</h2>
+    <table><thead><tr><th>When</th><th>Device</th><th>Reason</th><th>Ch</th><th>Energy</th><th>Silent</th></tr></thead>
+    <tbody id="incidents"></tbody></table></div>
+  <div class="panel"><h2>Routing links (by LQI)</h2>
+    <table><thead><tr><th>From</th><th>To</th><th>LQI</th><th>#</th></tr></thead>
+    <tbody id="routing"></tbody></table></div>
+  <div class="panel wide"><h2>Live frames (decoded)</h2>
+    <table class="scroll"><thead><tr><th>Ch</th><th>RSSI</th><th>LQI</th><th>Type</th><th>Summary</th></tr></thead>
+    <tbody id="frames"></tbody></table></div>
+</div>
+<script>
+const lqiClass=l=>l>=100?"good":l>=50?"fair":"weak";
+let frames=[],status=null;
+function setConn(ok){const e=document.getElementById("conn");e.textContent=ok?"connected":"disconnected";e.className=ok?"ok":"bad";}
+function ws(){
+  const p=location.protocol==="https:"?"wss:":"ws:";
+  const s=new WebSocket(`${p}//${location.host}/ws`);
+  s.onopen=()=>setConn(true);
+  s.onclose=()=>{setConn(false);setTimeout(ws,1500);};
+  s.onerror=()=>s.close();
+  s.onmessage=e=>{const m=JSON.parse(e.data);
+    if(m.kind==="status")status=m;
+    else if(m.kind==="frame"){frames.unshift(m);if(frames.length>120)frames.pop();}
+    else if(m.kind==="incident")loadIncidents();
+  };
+}
+const j=u=>fetch(u).then(r=>r.json()).catch(()=>null);
+async function loadDevices(){const d=await j("/api/devices");if(!d)return;
+  document.getElementById("devices").innerHTML=d.map(x=>
+   `<tr><td>${x.addr}</td><td>${x.name||""}</td><td>${x.role||""}</td><td>${x.last_channel??""}</td>`+
+   `<td>${x.last_rssi??""}</td><td class="${lqiClass(x.last_lqi)}">${x.last_lqi??""}</td><td>${x.count}</td></tr>`
+  ).join("")||`<tr><td colspan=7 class=dim>no devices yet — is the channel right?</td></tr>`;}
+async function loadRouting(){const r=await j("/api/routing");if(!r)return;
+  document.getElementById("routing").innerHTML=r.edges.map(e=>
+   `<tr><td>${e.src}</td><td>${e.dst}</td><td class="${lqiClass(e.lqi)}">${e.lqi??""}</td><td>${e.count}</td></tr>`
+  ).join("")||`<tr><td colspan=4 class=dim>no links yet</td></tr>`;}
+async function loadIncidents(){const i=await j("/api/incidents");if(!i)return;
+  document.getElementById("incidents").innerHTML=i.map(x=>
+   `<tr><td>${x.ts}s</td><td>${x.addr}</td><td class="${x.reason==='recovered'?'good':'weak'}">${x.reason}</td>`+
+   `<td>${x.channel??""}</td><td>${x.ed!=null?x.ed+'dBm':''}</td><td>${x.silent_s!=null?x.silent_s+'s':''}</td></tr>`
+  ).join("")||`<tr><td colspan=6 class=dim>no incidents logged</td></tr>`;}
+async function loadSpectrum(){const s=await j("/api/spectrum");const ed={};(s||[]).forEach(x=>ed[x.channel]=x.ed_dbm);
+  let h="";for(let c=11;c<=26;c++){const v=ed[c];const ht=v==null?2:Math.max(2,Math.min(100,(v+100)*1.4));
+   const cls=v==null?"dim":v>-60?"weak":v>-80?"fair":"good";
+   h+=`<div class=bar><div class="fill ${cls}" style="height:${ht}%"></div><span>${c}</span></div>`;}
+  document.getElementById("spectrum").innerHTML=h;}
+function render(){
+  if(status)document.getElementById("status").innerHTML=
+   `ch <b>${status.channel}</b> · captured <b>${status.captured}</b> · dropped ${status.dropped_buf}`;
+  document.getElementById("frames").innerHTML=frames.slice(0,60).map(f=>
+   `<tr><td>${f.channel}</td><td>${f.rssi}</td><td>${f.lqi}</td><td>${f.type}</td><td>${f.summary||""}</td></tr>`
+  ).join("");
+}
+document.getElementById("setch").onclick=()=>{
+  const v=parseInt(document.getElementById("ch").value,10);
+  if(v>=11&&v<=26)fetch("/api/set_channel?ch="+v,{method:"POST"});
+};
+ws();
+setInterval(()=>{loadDevices();loadRouting();loadIncidents();loadSpectrum();},3000);
+setInterval(render,500);
+loadDevices();loadRouting();loadIncidents();loadSpectrum();
+</script>
+</body>
+</html>

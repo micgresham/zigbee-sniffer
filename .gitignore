@@ -1,0 +1,58 @@
+# PlatformIO / ESP-IDF
+firmware/.pio/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/managed_components/
+firmware/dependencies.lock
+*.bin
+*.elf
+*.map
+
+# Embedded web-lite build output (web_assets/web_assets.c IS committed so the
+# firmware builds without running build.sh; the gz/html intermediates are not).
+firmware/web-lite/dist/
+firmware/web-lite/node_modules/
+firmware/src/standalone/web_assets/index.html
+firmware/src/standalone/web_assets/index.html.gz
+
+# Python / host
+host/.venv/
+host/**/__pycache__/
+host/**/*.pyc
+host/.pytest_cache/
+host/.ruff_cache/
+host/*.egg-info/
+host/build/
+host/dist/
+*.sqlite
+*.sqlite3
+*.db
+
+# Captures
+*.pcap
+*.pcapng
+captures/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# KiCad backups / fab output
+hardware/**/*-backups/
+hardware/**/fp-info-cache
+hardware/**/*.kicad_prl
+hardware/**/gerbers/
+
+# Editor / OS
+.DS_Store
+.vscode/.browse.c_cpp.db*
+.vscode/c_cpp_properties.json
+.vscode/launch.json
+.vscode/ipch/
+*.swp
+
+# PlatformIO-generated per-env sdkconfig (regenerated from sdkconfigs/*.defaults)
+firmware/sdkconfig.standalone
+firmware/sdkconfig.usb-sniffer
+firmware/sdkconfig.satellite

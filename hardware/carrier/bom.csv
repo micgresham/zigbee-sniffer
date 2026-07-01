@@ -1,0 +1,17 @@
+ref,qty,part,value,package,notes
+U_PRI,1,ESP32-C6-DevKitC-1,,module header,primary (SPI master); 8 MB flash
+U_SAT1..3,3,ESP32-C6 SuperMini,,castellated/header,satellites (SPI slaves); ESP32-C6FH4 4MB
+J_PWR,1,USB-C receptacle (or barrel jack),5V,SMD,carrier power input
+SW1,1,slide switch (or load switch),,SMD,5V power-source select (carrier vs board-USB)
+D1,D2,2,Schottky diode,SS34 / equiv,SMA,ideal-OR for power-select (alt to SW1)
+C_BULK,1,electrolytic/MLCC,100-470uF,,5V rail bulk
+C_DEC,4,MLCC,100nF,0402/0603,one per board 3V3 pin
+R_SCK,2,resistor (optional),33R,0402,series term on SCK/MOSI for SI (optional)
+LED_PWR,1,LED + 1k,green,0603,power indicator
+LED_DR,3,LED + 1k,amber,0603,per-satellite DATA_READY indicator (optional)
+H1..H4,4,mounting hole,M2.5,,corners
+J_HDR,8,female socket header,2.54mm,THT,board sockets (rows sized to each board)
+# --- USB-hub option (only if boards expose USB D+/D- on pins) ---
+U_HUB,0/1,FE1.1s,,SSOP-28,4-port USB2.0 hub (host-mode integrated carrier)
+Y1,0/1,crystal,12MHz,SMD,hub clock
+J_USB_UP,0/1,USB-C receptacle,,SMD,hub upstream to HA/host box

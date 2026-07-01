@@ -1,0 +1,41 @@
+# Shared ESP-IDF defaults for all build profiles (ESP32-C6)
+
+# --- IEEE 802.15.4 radio ---------------------------------------------------
+# Force-enabled by the C6 SoC support anyway. The standalone primary still has
+# no *local* capture — it inits the radio PHY and immediately parks it asleep
+# (to satisfy sleep-retention without starving WiFi); real capture comes from
+# SPI satellites. See src/standalone/app_main.c.
+CONFIG_IEEE802154_ENABLED=y
+CONFIG_IEEE802154_RX_BUFFER_SIZE=32
+
+# --- FreeRTOS / system -----------------------------------------------------
+CONFIG_FREERTOS_HZ=1000
+# app_main (standalone) brings up WiFi + httpd + SPIFFS in the main task; give it
+# headroom so init doesn't overflow the stack.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# --- Flash size ------------------------------------------------------------
+# ESP32-C6-DevKitC-1 has 8 MB. Must be >= the partition table extent (~4 MB) and
+# match the board declaration, or config generation errors and drops settings.
+# (A 4 MB SuperMini still flashes fine — esptool auto-detects the real size.)
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
+
+# --- Partition table -------------------------------------------------------
+# Custom table provides app + nvs + (standalone) a littlefs/data partition.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- HTTP server (standalone web UI) ---------------------------------------
+# WebSocket support is NOT default-on in IDF and is required by the standalone
+# web UI. Kept in the shared defaults because the per-env defaults file proved
+# unreliable for component options under PlatformIO. Harmless for other builds.
+CONFIG_HTTPD_WS_SUPPORT=y
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+
+# --- Logging ---------------------------------------------------------------
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
+
+# --- Compiler --------------------------------------------------------------
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y

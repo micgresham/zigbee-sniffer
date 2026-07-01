@@ -1,0 +1,73 @@
+// proto.h — wire protocol constants shared by all builds.
+// MUST stay in sync with /protocol/framing.md and /protocol/framing.json.
+#pragma once
+
+#include <stdint.h>
+
+#define ZB_MAGIC0 0x5A
+#define ZB_MAGIC1 0xBE
+#ifndef PROTO_VER
+#define PROTO_VER 1
+#endif
+
+#define ZB_MAX_PSDU 127             // IEEE 802.15.4 max PHY payload
+#define ZB_MAX_PAYLOAD 2048         // max framing payload (protocol limit)
+#define ZB_HEADER_LEN 6             // magic0,magic1,ver,type,len(2)
+#define ZB_CRC_LEN 2
+#define ZB_FRAME_OVERHEAD (ZB_HEADER_LEN + ZB_CRC_LEN)
+
+// Right-sized buffer for messages the firmware *originates* (captured frames,
+// ED, status, incidents). The largest is a CAPTURED_FRAME (~14 meta + 127 PSDU)
+// or an incident JSON (~224 B). 256 B payload covers all; using ZB_MAX_PAYLOAD
+// here would put a ~2 KB buffer on the stack and overflow the main task.
+#define ZB_MAX_TX (ZB_FRAME_OVERHEAD + 256)
+
+// Message types — device -> host (0x0_)
+typedef enum {
+    MSG_CAPTURED_FRAME = 0x01,
+    MSG_ED_RESULT      = 0x02,
+    MSG_STATUS         = 0x03,
+    MSG_LOG            = 0x04,
+    MSG_ACK            = 0x05,
+    MSG_INCIDENT       = 0x06,   // payload: UTF-8 JSON (see docs/incidents.md)
+    MSG_PROBE_RESULT   = 0x07,   // radio_id(1) target(2) acked(1) rssi(i8) lqi(1)
+    // host -> device (0x8_)
+    CMD_SET_CHANNEL    = 0x81,
+    CMD_SET_MODE       = 0x82,
+    CMD_START          = 0x83,
+    CMD_STOP           = 0x84,
+    CMD_SET_HOP        = 0x85,
+    CMD_ED_SCAN        = 0x86,
+    CMD_SET_KEY        = 0x87,
+    CMD_GET_STATUS     = 0x88,
+    CMD_SET_RADIO_ID   = 0x89,
+    CMD_PROBE          = 0x8A,   // active test: target(2) pan(2) — TX a MAC frame, await ACK
+} zb_msg_type_t;
+
+// Capture/operating mode (see framing.md `mode` enum)
+typedef enum {
+    MODE_IDLE            = 0,
+    MODE_CAPTURE         = 1,
+    MODE_ED_SWEEP        = 2,
+    MODE_CAPTURE_PLUS_ED = 3,
+} zb_mode_t;
+
+// CAPTURED_FRAME flags
+#define FLAG_CRC_OK        0x01
+#define FLAG_PROMISCUOUS   0x02
+#define FLAG_FRAME_PENDING 0x04
+#define FLAG_WAS_ACKED     0x08
+
+#define ZB_CHANNEL_MIN 11
+#define ZB_CHANNEL_MAX 26
+
+// A captured frame as it flows from the radio callback to the transport task.
+typedef struct {
+    uint8_t  len;                 // PSDU length (includes 2-byte FCS)
+    int8_t   rssi;                // dBm
+    uint8_t  lqi;                 // 0..255
+    uint8_t  channel;             // 11..26
+    uint8_t  flags;               // FLAG_*
+    uint64_t timestamp;           // microseconds
+    uint8_t  psdu[ZB_MAX_PSDU];
+} captured_frame_t;
