@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -14,20 +15,28 @@ import (
 // Config is the persisted host configuration.
 type Config struct {
 	HAHost    string   // Home Assistant host or IP (URL is built from this)
-	HAToken   string   // long-lived access token
+	HAToken   string   // long-lived access token (encrypted at rest)
 	Channel   int      // capture channel 11..26
-	Key       string   // Zigbee network key (hex)
+	Key       string   // Zigbee network key (hex; encrypted at rest)
 	DB        string   // SQLite path
 	HTTPPort  int      // web UI port
 	Ports     []string // serial ports
 	ZHABackup string   // ZHA backup JSON path
 	// RadioRoles maps radio-id → role, e.g. "0=sniffer,1=spectrum,2=tester".
 	RadioRoles string
+	HopDwellMs int // channel-hop dwell (0 = pinned)
+	Mode       int // capture mode (1=capture 2=ed 3=cap+ed 0=idle)
+	// UIPrefs holds web-UI preferences (theme, routing spacing, filters…), stored
+	// as `ui.<key>: <value>` lines so they persist and are human-editable.
+	UIPrefs map[string]string
+
+	secretKey []byte // AES key for encrypting HAToken/Key at rest
 }
 
 // Load reads a config file. A missing file yields an empty Config (no error).
+// Secrets (network key, HA token) are decrypted using the sidecar key file.
 func Load(path string) *Config {
-	c := &Config{}
+	c := &Config{secretKey: loadOrCreateKey(path + ".key"), UIPrefs: map[string]string{}}
 	f, err := os.Open(path)
 	if err != nil {
 		return c
@@ -62,14 +71,26 @@ func Load(path string) *Config {
 			c.ZHABackup = v
 		case "radio_roles":
 			c.RadioRoles = v
+		case "hop_dwell_ms":
+			c.HopDwellMs, _ = strconv.Atoi(v)
+		case "mode":
+			c.Mode, _ = strconv.Atoi(v)
 		case "ports":
 			for _, p := range strings.Split(v, ",") {
 				if p = strings.TrimSpace(p); p != "" {
 					c.Ports = append(c.Ports, p)
 				}
 			}
+		default:
+			if strings.HasPrefix(k, "ui.") {
+				c.UIPrefs[strings.TrimPrefix(k, "ui.")] = v
+			}
 		}
 	}
+	// Decrypt secrets that were stored as "enc:…" (plaintext values pass through
+	// and get encrypted on the next Save — e.g. a hand-edited key).
+	c.HAToken = decryptField(c.secretKey, c.HAToken)
+	c.Key = decryptField(c.secretKey, c.Key)
 	return c
 }
 
@@ -83,19 +104,33 @@ func (c *Config) Save(path string) error {
 		}
 	}
 	w("ha_host", c.HAHost)
-	w("ha_token", c.HAToken)
+	w("ha_token", encryptField(c.secretKey, c.HAToken)) // encrypted at rest
 	if c.Channel > 0 {
 		fmt.Fprintf(&b, "channel: %d\n", c.Channel)
 	}
-	w("key", c.Key)
+	w("key", encryptField(c.secretKey, c.Key)) // encrypted at rest
 	w("db", c.DB)
 	if c.HTTPPort > 0 {
 		fmt.Fprintf(&b, "http_port: %d\n", c.HTTPPort)
 	}
 	w("zha_backup", c.ZHABackup)
 	w("radio_roles", c.RadioRoles)
+	if c.HopDwellMs > 0 {
+		fmt.Fprintf(&b, "hop_dwell_ms: %d\n", c.HopDwellMs)
+	}
+	if c.Mode > 0 {
+		fmt.Fprintf(&b, "mode: %d\n", c.Mode)
+	}
 	if len(c.Ports) > 0 {
 		w("ports", strings.Join(c.Ports, ","))
+	}
+	keys := make([]string, 0, len(c.UIPrefs))
+	for k := range c.UIPrefs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		w("ui."+k, c.UIPrefs[k])
 	}
 	return os.WriteFile(path, []byte(b.String()), 0600)
 }

@@ -121,6 +121,18 @@ each Zigbee channel), and a **waterfall** (energy over time). `POST /api/scan?dw
 Radial layout by hop-distance from the coordinator. **Scroll to zoom, drag to pan**, "Reset view"
 to recenter, and toggle **End devices** to show only the routing backbone or include leaf clients.
 
+### Firmware update (OTA)
+
+Update the C6 firmware **over the serial link** — no esptool. In **Config → Firmware update**, pick
+`firmware/.pio/build/tethered/firmware.bin`, choose the target radio, and hit Update; a progress bar
+tracks it over the WebSocket. Backed by `POST /api/ota?target=0[&port=…]` (the `.bin` is the request
+body); the device writes the inactive OTA slot, verifies, and reboots into it.
+
+Requires the **OTA partition table** (`partitions_ota.csv`, already wired into the `tethered` env),
+so flash **once over USB** with this firmware first; after that, updates go over serial. The
+bootloader rolls back if an image fails to confirm, and USB reflashing is always the fallback.
+Satellite OTA (over SPI) is staged — see [../docs/ota.md](../docs/ota.md).
+
 ### Signal source: sniffer vs network (important)
 
 Every RSSI/LQI the sniffer shows is **observed at the sniffer's single location** (marked **⌖**),

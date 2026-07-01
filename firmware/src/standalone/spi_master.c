@@ -1,5 +1,6 @@
 // spi_master.c — see spi_master.h.
-#if defined(BUILD_STANDALONE)
+// Built for the standalone aggregator and the tethered relay (OTA to satellites).
+#if defined(BUILD_STANDALONE) || defined(BUILD_USB_SNIFFER)
 
 #include "spi_master.h"
 #include "codec.h"
@@ -18,6 +19,9 @@ static const int s_dready[PRI_SAT_COUNT] = PRI_DREADY_PINS;
 static spi_device_handle_t s_dev[PRI_SAT_COUNT];
 static zb_decoder_t s_dec[PRI_SAT_COUNT];
 static spi_frame_cb_t s_cb;
+static spi_msg_cb_t   s_msg_cb;
+
+void spi_master_set_msg_cb(spi_msg_cb_t cb) { s_msg_cb = cb; }
 
 // Parse a CAPTURED_FRAME payload into a captured_frame_t (+ radio id).
 static bool parse_captured(const uint8_t *p, uint16_t len, uint8_t *radio, captured_frame_t *cf)
@@ -52,10 +56,12 @@ static void poll_task(void *arg)
             if (spi_device_transmit(s_dev[i], &t) != ESP_OK) continue;
             for (int b = 0; b < XFER; b++) {
                 uint8_t type; const uint8_t *pl; uint16_t pl_len;
-                if (zb_decoder_push(&s_dec[i], rx[b], &type, &pl, &pl_len)
-                    && type == MSG_CAPTURED_FRAME) {
+                if (!zb_decoder_push(&s_dec[i], rx[b], &type, &pl, &pl_len)) continue;
+                if (type == MSG_CAPTURED_FRAME) {
                     uint8_t radio; captured_frame_t cf;
                     if (parse_captured(pl, pl_len, &radio, &cf) && s_cb) s_cb(radio, &cf);
+                } else if (s_msg_cb) {
+                    s_msg_cb(type, pl, pl_len); // e.g. MSG_OTA_STATUS from the satellite
                 }
             }
         }
@@ -93,6 +99,17 @@ void spi_master_init(spi_frame_cb_t cb)
 
     xTaskCreate(poll_task, "spi_pri", 4096, NULL, 6, NULL);
     ESP_LOGI(TAG, "SPI master up: polling %d satellites", PRI_SAT_COUNT);
+}
+
+void spi_master_send_to(int sat, const uint8_t *data, size_t len)
+{
+    if (sat < 0 || sat >= PRI_SAT_COUNT || len == 0 || len > XFER) return;
+    WORD_ALIGNED_ATTR static uint8_t tx[XFER];
+    WORD_ALIGNED_ATTR static uint8_t rx[XFER];
+    memset(tx, 0, sizeof(tx));
+    memcpy(tx, data, len);
+    spi_transaction_t t = { .length = XFER * 8, .tx_buffer = tx, .rx_buffer = rx };
+    spi_device_transmit(s_dev[sat], &t);
 }
 
 void spi_master_set_channel(uint8_t channel)

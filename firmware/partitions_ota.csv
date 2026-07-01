@@ -1,0 +1,9 @@
+# OTA-capable partition table for the tethered build (8 MB DevKitC-1).
+# Two app slots + otadata enable serial OTA (see docs/ota.md). No SPIFFS: the
+# tethered build streams to the host and doesn't keep an on-device log.
+# Name,     Type, SubType,  Offset,   Size,     Flags
+nvs,        data, nvs,      0x9000,   0x6000,
+otadata,    data, ota,      0xf000,   0x2000,
+phy_init,   data, phy,      0x11000,  0x1000,
+ota_0,      app,  ota_0,    0x20000,  0x1C0000,
+ota_1,      app,  ota_1,    0x1E0000, 0x1C0000,

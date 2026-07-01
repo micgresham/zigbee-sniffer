@@ -97,6 +97,11 @@ Result of an active MAC probe (see `CMD_PROBE`). Payload:
 `radio_id(1)` `target(2, LE short addr)` `acked(1)` `rssi(int8, ACK RSSI)` `lqi(1, ACK LQI)`.
 `acked=1` means the target's 802.15.4 MAC auto-ACKed — its radio is alive and on-channel.
 
+#### `0x08 OTA_STATUS`
+Firmware-update progress (see `CMD_OTA_*` and [docs/ota.md](../docs/ota.md)). Payload:
+`target(1)` `state(1)` `received(4, LE)` `total(4, LE)` `err(1)`.
+`state`: 0 idle · 1 receiving · 2 writing · 3 verifying · 4 ok(rebooting) · 5 error.
+
 ---
 
 ### Host → device  (`0x8_`)
@@ -113,6 +118,10 @@ Result of an active MAC probe (see `CMD_PROBE`). Payload:
 | `0x88` | `CMD_GET_STATUS`  | — (device replies with `STATUS`) |
 | `0x89` | `CMD_SET_RADIO_ID`| `radio_id(1)` (satellite provisioning) |
 | `0x8A` | `CMD_PROBE`       | `target(2, LE)` `pan(2, LE)` — TX a MAC frame to `target`, await ACK (active test). Device replies with `PROBE_RESULT`. |
+| `0x8B` | `CMD_OTA_BEGIN`   | `target(1)` `total_size(4, LE)` `img_crc32(4, LE)` — start a firmware update (target 0 = this C6, 1..3 = satellite over SPI) |
+| `0x8C` | `CMD_OTA_DATA`    | `target(1)` `offset(4, LE)` `chunk(n)` — a firmware chunk (≤512 B) |
+| `0x8D` | `CMD_OTA_END`     | `target(1)` — finish, verify, set boot slot, reboot |
+| `0x8E` | `CMD_OTA_ABORT`   | `target(1)` — cancel an in-progress update |
 
 ---
 

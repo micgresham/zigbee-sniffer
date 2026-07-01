@@ -31,6 +31,7 @@ typedef enum {
     MSG_ACK            = 0x05,
     MSG_INCIDENT       = 0x06,   // payload: UTF-8 JSON (see docs/incidents.md)
     MSG_PROBE_RESULT   = 0x07,   // radio_id(1) target(2) acked(1) rssi(i8) lqi(1)
+    MSG_OTA_STATUS     = 0x08,   // target(1) state(1) received(4) total(4) err(1)
     // host -> device (0x8_)
     CMD_SET_CHANNEL    = 0x81,
     CMD_SET_MODE       = 0x82,
@@ -42,7 +43,15 @@ typedef enum {
     CMD_GET_STATUS     = 0x88,
     CMD_SET_RADIO_ID   = 0x89,
     CMD_PROBE          = 0x8A,   // active test: target(2) pan(2) — TX a MAC frame, await ACK
+    CMD_OTA_BEGIN      = 0x8B,   // target(1) total_size(4) img_crc32(4)
+    CMD_OTA_DATA       = 0x8C,   // target(1) offset(4) chunk(n)
+    CMD_OTA_END        = 0x8D,   // target(1)
+    CMD_OTA_ABORT      = 0x8E,   // target(1)
 } zb_msg_type_t;
+
+// OTA target: 0 = this (tethered) C6, 1..3 = satellite over SPI.
+// OTA state (MSG_OTA_STATUS.state).
+enum { OTA_IDLE = 0, OTA_RECEIVING, OTA_WRITING, OTA_VERIFYING, OTA_OK, OTA_ERROR };
 
 // Capture/operating mode (see framing.md `mode` enum)
 typedef enum {

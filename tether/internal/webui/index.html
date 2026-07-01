@@ -6,12 +6,23 @@
 <title>Zigbee Sniffer — Tethered</title>
 <style>
 :root{--bg:#0d1117;--panel:#161b22;--panel2:#1c232c;--line:#2a3340;--fg:#e6edf3;--dim:#8b97a3;
---good:#3fb950;--fair:#d29922;--weak:#f85149;--accent:#58a6ff;--accent2:#7c5cff}
+--good:#3fb950;--fair:#d29922;--weak:#f85149;--accent:#58a6ff;--accent2:#7c5cff;
+--btn:#222b38;--btnh:#28333f;--field:#0b0e13;--rowhover:#1d2733;--tagbg:#22303f;--tabbg:#0f141a;--diagbg:#0f141b;
+--header:linear-gradient(180deg,#1b2230,#161b22)}
 /* Day theme: light background, dark foreground (accent/status colors unchanged). */
-body.light{--bg:#f4f6f8;--panel:#ffffff;--panel2:#eef1f5;--line:#d5dbe2;--fg:#1a2029;--dim:#5b6672}
+body.light{--bg:#f4f6f8;--panel:#ffffff;--panel2:#eef1f5;--line:#d5dbe2;--fg:#1a2029;--dim:#5b6672;
+--btn:#eaeef3;--btnh:#dde3ea;--field:#ffffff;--rowhover:#eef2f6;--tagbg:#e3e8ee;--tabbg:#eef1f5;--diagbg:#f7f9fb;
+--header:linear-gradient(180deg,#ffffff,#eef1f5)}
+/* Day theme: keep the status chips subtle on white (they were dark tints). */
+body.light .capind.run{background:#dff5e6}body.light .capind.quiet{background:#faf0d6}
+body.light .capind.sweep{background:#dcecfb}body.light .capind.idle{background:#e7ebf0}
+body.light .pill,body.light #c-decstat.on,body.light #ha-stat.on,body.light #ha-stat.ok{background:#dff5e6}
+body.light #conn.ok{background:#dff5e6}body.light #conn.bad{background:#fbe2e2}body.light #conn.warn{background:#fbf1d6}
+body.light .tag.coord,body.light .wifirow .wc.on{background:#dde9fb}
+body.light #waterfall,body.light .logs{background:#0b0e13}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-header{display:flex;align-items:center;gap:12px;padding:11px 18px;background:linear-gradient(180deg,#1b2230,#161b22);
+header{display:flex;align-items:center;gap:12px;padding:11px 18px;background:var(--header);
 border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
 header h1{font-size:16px;margin:0;font-weight:680;letter-spacing:.2px}
 header h1 span{color:var(--accent)}
@@ -23,9 +34,9 @@ header h1 span{color:var(--accent)}
 .metrics b{color:var(--fg);font-variant-numeric:tabular-nums}
 .controls{display:flex;gap:8px;padding:12px 18px;align-items:center;flex-wrap:wrap;background:var(--panel);border-bottom:1px solid var(--line)}
 .controls label{color:var(--dim);font-size:13px}
-.controls input{width:60px;background:#0b0e13;color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:6px}
-button{background:#222b38;color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:7px 13px;cursor:pointer;font-size:13px;transition:.12s}
-button:hover{border-color:var(--accent);background:#28333f}
+.controls input{width:60px;background:var(--field);color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:6px}
+button{background:var(--btn);color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:7px 13px;cursor:pointer;font-size:13px;transition:.12s}
+button:hover{border-color:var(--accent);background:var(--btnh)}
 button.on{border-color:var(--accent);color:var(--accent)}
 .pill{font-size:11px;padding:2px 8px;border-radius:10px;background:#0f2e1a;color:var(--good)}
 .grid{display:grid;grid-template-columns:1.25fr 1fr;gap:14px;padding:14px 18px 24px}
@@ -36,11 +47,11 @@ button.on{border-color:var(--accent);color:var(--accent)}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th,td{text-align:left;padding:5px 7px;border-bottom:1px solid var(--line);white-space:nowrap}
 th{color:var(--dim);font-weight:500;position:sticky;top:0;background:var(--panel)}
-tr.click{cursor:pointer}tr.click:hover td{background:#1d2733}
+tr.click{cursor:pointer}tr.click:hover td{background:var(--rowhover)}
 .good{color:var(--good)}.fair{color:var(--fair)}.weak{color:var(--weak)}.dim{color:var(--dim)}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .scroll{max-height:300px;overflow:auto;display:block}
-.tag{font-size:10px;padding:1px 6px;border-radius:8px;background:#22303f;color:var(--dim)}
+.tag{font-size:10px;padding:1px 6px;border-radius:8px;background:var(--tagbg);color:var(--dim)}
 .tag.coord{background:#10243f;color:var(--accent)}
 .lock{color:var(--accent2)}
 #routing{width:100%;height:340px;display:block}
@@ -63,7 +74,7 @@ tr.click{cursor:pointer}tr.click:hover td{background:#1d2733}
 .legend{font-size:11px;color:var(--dim);display:flex;gap:12px;margin-top:6px}
 .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}
 .tabs{display:flex;gap:6px;padding:0 2px 0;margin:14px 0 0}
-.tabbtn{background:#0f141a;border:1px solid var(--line);border-bottom:none;border-radius:7px 7px 0 0;color:var(--dim);padding:8px 16px;cursor:pointer;font-size:13px;font-weight:600}
+.tabbtn{background:var(--tabbg);border:1px solid var(--line);border-bottom:none;border-radius:7px 7px 0 0;color:var(--dim);padding:8px 16px;cursor:pointer;font-size:13px;font-weight:600}
 .tabbtn.on{background:var(--panel);color:var(--fg)}
 .tabbtn:hover{color:var(--fg)}
 .capind{font-size:12px;font-weight:600;padding:2px 10px;border-radius:12px;margin-left:10px;vertical-align:1px}
@@ -73,24 +84,33 @@ tr.click{cursor:pointer}tr.click:hover td{background:#1d2733}
 .capind.sweep{background:#0d1f2a;color:#58a6ff}
 .capind.idle{background:#1a1f27;color:#8b97a3}
 @keyframes cappulse{50%{opacity:.3}}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{background:var(--panel2);border:0;border-right:1px solid var(--line);color:var(--dim);padding:7px 16px;cursor:pointer;font-size:12px;font-weight:600}
+.seg button:last-child{border-right:0}
+.seg button.on{background:var(--accent);color:#fff}
+.seg button:not(.on):hover{color:var(--fg)}
 /* control panel */
 .cpanel .cgroups{display:flex;flex-wrap:wrap;gap:18px}
 .cgroup{display:flex;flex-direction:column;gap:6px}
 .cgroup>label{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.04em}
 .cgroup .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
-.cgroup input{background:#0b0e13;color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:6px;width:64px}
-select{background:#0b0e13;color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:6px}
+.cgroup input{background:var(--field);color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:6px;width:64px}
+select{background:var(--field);color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:6px}
 #c-decstat.on{background:#0f2e1a;color:var(--good)}
 .devstatus{margin-top:14px;padding-top:12px;border-top:1px solid var(--line);display:flex;gap:22px;flex-wrap:wrap;font-size:12px;color:var(--dim)}
 .devstatus b{color:var(--fg);font-variant-numeric:tabular-nums}
 #ha-stat.on,#ha-stat.ok{background:#0f2e1a;color:var(--good)}
 #ha-stat.err{background:#3a1414;color:var(--weak)}
 .diags{display:flex;flex-direction:column;gap:8px}
-.diag{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;background:#0f141b;border-left:3px solid var(--line)}
-.diag.high{border-left-color:var(--weak)}.diag.warn{border-left-color:var(--fair)}.diag.info{border-left-color:var(--good)}
-.diag .sev{font-size:10px;text-transform:uppercase;font-weight:700;width:42px}
-.diag.high .sev{color:var(--weak)}.diag.warn .sev{color:var(--fair)}.diag.info .sev{color:var(--good)}
-.diag .cat{font-weight:600;width:120px}.diag .msg{color:var(--dim);flex:1}
+.diag{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;background:var(--diagbg);border-left:3px solid var(--line)}
+.diag.critical{border-left-color:#ff5c8a}.diag.error{border-left-color:var(--weak)}
+.diag.warning{border-left-color:var(--fair)}.diag.notice{border-left-color:var(--accent)}.diag.info{border-left-color:var(--good)}
+.diag .sev{font-size:10px;text-transform:uppercase;font-weight:700;width:56px}
+.diag.critical .sev{color:#ff5c8a}.diag.error .sev{color:var(--weak)}
+.diag.warning .sev{color:var(--fair)}.diag.notice .sev{color:var(--accent)}.diag.info .sev{color:var(--good)}
+.dgfilter{display:flex;flex-wrap:wrap;gap:6px 14px;margin-bottom:10px;font-size:12px}
+.dgfilter label{display:inline-flex;align-items:center;gap:4px;color:var(--dim);cursor:pointer}
+.diag .cat{font-weight:600;width:130px}.diag .msg{color:var(--dim);flex:1}
 .diag .addr{cursor:pointer;color:var(--accent)}
 .connstats{display:flex;gap:20px;flex-wrap:wrap;font-size:12px;color:var(--dim);margin-bottom:10px;align-items:center}
 .connstats b{color:var(--fg);font-variant-numeric:tabular-nums}
@@ -135,7 +155,7 @@ border-left:1px solid var(--line);transform:translateX(100%);transition:.2s;z-in
 <div class="grid">
   <div class="panel wide cpanel" data-tab="frames">
     <h2>Capture controls <span id="cap-ind" class="capind idle">■ idle</span>
-      <span class="dim" style="font-weight:400;text-transform:none">— drive the tethered node live</span></h2>
+      <span class="dim" style="font-weight:400;text-transform:none">— start/stop capture &amp; set channel/mode on the connected C6</span></h2>
     <div class="cgroups">
       <div class="cgroup"><label>Capture</label><div class="row">
         <button id="c-start">▶ Start</button><button id="c-stop">⏹ Stop</button>
@@ -158,8 +178,11 @@ border-left:1px solid var(--line);transform:translateX(100%);transition:.2s;z-in
     <h2>Configuration <span class="dim" style="font-weight:400;text-transform:none">— network, decryption, integrations &amp; export (saved to zbsniff.yaml)</span></h2>
     <div class="cgroups">
       <div class="cgroup"><label>Display theme</label><div class="row">
-        <select id="theme-sel"><option value="auto">Auto (follow system)</option>
-        <option value="night">Night (dark)</option><option value="day">Day (light)</option></select>
+        <div class="seg" id="theme-seg">
+          <button data-theme="day">☀ Day</button>
+          <button data-theme="night">☾ Night</button>
+          <button data-theme="auto">◐ Auto</button>
+        </div>
       </div></div>
       <div class="cgroup"><label>Channel hopping</label><div class="row">
         <input id="c-dwell" type="number" min="0" max="2000" value="0">
@@ -203,13 +226,37 @@ border-left:1px solid var(--line);transform:translateX(100%);transition:.2s;z-in
       <b>tester</b> capture + default probe radio · <b>hopper</b> capture, channel-hopping · <b>idle</b> parked</div>
   </div>
 
+  <div class="panel wide" data-tab="config">
+    <h2>Firmware update (OTA) <span class="dim" style="font-weight:400;text-transform:none;font-size:11px">⚠ flashes the device over serial — do not unplug during update</span></h2>
+    <div class="row" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <input id="ota-file" type="file" accept=".bin">
+      <label class="dim">target <select id="ota-target">
+        <option value="0">This C6 (tethered)</option>
+        <option value="1">Satellite 1</option><option value="2">Satellite 2</option><option value="3">Satellite 3</option></select></label>
+      <label class="dim">radio <select id="ota-radio"><option value="">auto</option></select></label>
+      <button id="ota-go">Update firmware</button>
+    </div>
+    <div id="ota-prog" style="display:none;margin-top:12px;max-width:520px">
+      <div style="background:var(--panel2);border:1px solid var(--line);border-radius:6px;height:14px;overflow:hidden">
+        <div id="ota-bar" style="height:100%;width:0;background:var(--accent);transition:width .2s"></div></div>
+      <div id="ota-stat" class="dim" style="font-size:12px;margin-top:5px"></div>
+    </div>
+    <div class="dim" style="font-size:11px;margin-top:8px">Upload <span class=mono>firmware/.pio/build/tethered/firmware.bin</span>. USB reflashing stays the fallback and can't brick the device. Satellite OTA (over SPI) is staged — see docs/ota.md.</div>
+  </div>
+
   <div class="panel">
     <h2><span>Routing tree → coordinator <span class="cnt" id="r-cnt">0 links</span></span>
       <span style="display:flex;gap:6px">
         <button id="rg-leaves" class="on" style="font-size:11px;padding:2px 8px">End devices</button>
         <button id="rg-reset" style="font-size:11px;padding:2px 8px">Reset view</button>
       </span></h2>
-    <svg id="routing" viewBox="0 0 600 340" preserveAspectRatio="xMidYMid meet" style="cursor:grab;touch-action:none"></svg>
+    <div class="row" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:6px;font-size:12px">
+      <label class="dim">isolate <select id="rg-isolate" style="max-width:170px"><option value="">All devices</option></select></label>
+      <label class="dim" title="horizontal spacing">↔ <input id="rg-sx" type="range" min="0.5" max="3" step="0.1" value="1" style="width:74px;vertical-align:middle"></label>
+      <label class="dim" title="vertical spacing">↕ <input id="rg-sy" type="range" min="0.5" max="3" step="0.1" value="1" style="width:74px;vertical-align:middle"></label>
+      <button id="rg-netlqi" style="font-size:11px;padding:2px 8px" title="label each link with sniffer LQI ⌖ / coordinator (HA) LQI">LQI ⌖/net</button>
+    </div>
+    <svg id="routing" viewBox="0 0 600 340" preserveAspectRatio="xMidYMid meet" style="cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none"></svg>
     <div class="legend">
       <span><i style="background:var(--accent)"></i>coordinator</span>
       <span><i style="background:var(--good)"></i>strong ⌖</span>
@@ -217,7 +264,7 @@ border-left:1px solid var(--line);transform:translateX(100%);transition:.2s;z-in
       <span><i style="background:var(--weak)"></i>weak / isolated</span>
       <span>— — parent not yet observed</span>
     </div>
-    <div class="dim" style="font-size:10px;margin-top:2px">Edge colour = link quality <b>as heard by the sniffer</b> (one vantage point), not the device's own link. Scroll to zoom, drag to pan.</div>
+    <div class="dim" style="font-size:10px;margin-top:2px">Edge colour = link quality <b>as heard by the sniffer</b> (one vantage point), not the device's own link. Scroll to zoom · drag empty space to pan · <b>drag a node to pull it out</b> (Reset view releases pinned nodes).</div>
   </div>
 
   <div class="panel">
@@ -239,11 +286,17 @@ border-left:1px solid var(--line);transform:translateX(100%);transition:.2s;z-in
       <button id="sp-scan">Scan once</button>
       <button id="sp-cont">Continuous</button>
       <button id="sp-peakclear">Clear peaks</button>
-      <span class="dim">bar = current · ▔ = peak-hold · row below = overlapping Wi-Fi channel</span>
+      <span class="dim">bar = current · ▔ = peak-hold · row below = Wi-Fi channels 1–13 by frequency (1/6/11 emphasised)</span>
       <span id="sp-status" class="weak" style="font-size:11px"></span>
     </div>
     <div class="spectrum" id="spectrum"></div>
-    <div class="wifirow" id="wifirow"></div>
+    <div id="wifirow" style="position:relative;height:40px;margin-top:6px"></div>
+    <div class="dim" style="font-size:10px;margin-top:4px;display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+      <b style="color:var(--dim)">Wi-Fi 2.4 GHz</b>
+      <span><i style="display:inline-block;width:12px;height:8px;background:var(--accent);opacity:.55;border-radius:2px;margin-right:4px;vertical-align:0"></i>ch 1 / 6 / 11 — the non-overlapping channels</span>
+      <span><i style="display:inline-block;width:12px;height:8px;background:#3a6ea5;opacity:.28;border-radius:2px;margin-right:4px;vertical-align:0"></i>other channels (2–5, 7–10, 12, 13)</span>
+      <span>each band ≈ 22 MHz wide; a Zigbee channel under a band shares that spectrum</span>
+    </div>
     <div class="dim" style="margin:12px 0 4px;font-size:11px;text-transform:uppercase;letter-spacing:.05em">Waterfall (energy over time)</div>
     <canvas id="waterfall" width="640" height="150"></canvas>
   </div>
@@ -255,14 +308,18 @@ border-left:1px solid var(--line);transform:translateX(100%);transition:.2s;z-in
   </div>
 
   <div class="panel wide" data-tab="diagnostics">
-    <h2>Automatic diagnostics <span class="cnt" id="dg-cnt">0</span></h2>
+    <h2>Automatic diagnostics <span class="cnt" id="dg-cnt">0</span>
+      <span class="dim" style="font-weight:400;text-transform:none;font-size:11px">syslog levels · uncheck to hide a category</span></h2>
+    <div id="dg-filter" class="dgfilter"></div>
     <div id="diagnostics" class="diags"><span class="dim">analysing…</span></div>
   </div>
 
   <div class="panel wide" data-tab="active">
     <h2>Active testing <span class="dim" style="font-weight:400;text-transform:none;font-size:11px">⚠ transmits on your live network — verifies a device's radio is alive on-channel</span></h2>
     <div class="row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
-      <label class="dim">device <input id="at-addr" placeholder="0x1234" style="width:90px"></label>
+      <label class="dim">device
+        <select id="at-device" style="max-width:170px"><option value="">— pick —</option></select>
+        <input id="at-addr" placeholder="or 0x1234" style="width:88px" title="pick from the list or type a short address (override)"></label>
       <label class="dim">radio
         <select id="at-radio"><option value="">any</option></select></label>
       <button id="at-probe">Probe once</button>
@@ -300,7 +357,7 @@ border-left:1px solid var(--line);transform:translateX(100%);transition:.2s;z-in
     <div id="about-body" class="kv" style="max-width:640px"><span class="dim">…</span></div>
     <div class="dim" style="font-size:12px;margin-top:10px">
       Zigbee Sniffer &amp; Diagnostics Platform — a full-featured 802.15.4 sniffer, routing/RF
-      diagnostics, and active testing for ESP32-C6, with a single-binary Go host.
+      diagnostics.
     </div>
   </div>
 </div>
@@ -339,7 +396,15 @@ function ws(){const p=location.protocol==="https:"?"wss:":"ws:";
   s.onmessage=e=>{const m=JSON.parse(e.data);lastData=Date.now();
     if(m.kind==="status")status=m;
     else if(m.kind==="frame"){if(!paused){frames.unshift(m);if(frames.length>200)frames.pop();}}
-    else if(m.kind==="incident")loadIncidents();};}
+    else if(m.kind==="incident")loadIncidents();
+    else if(m.kind==="ota")otaProgress(m);};}
+const otaStates=["idle","receiving","writing","verifying","complete — rebooting","error"];
+function otaProgress(m){const box=document.getElementById("ota-prog");if(!box)return;box.style.display="block";
+  const pct=m.total?Math.round(m.received/m.total*100):0,bar=document.getElementById("ota-bar");
+  bar.style.width=pct+"%";
+  bar.style.background=m.state===5?"var(--weak)":m.state===4?"var(--good)":"var(--accent)";
+  document.getElementById("ota-stat").textContent=
+    `target ${m.target} · ${otaStates[m.state]||m.state} · ${m.received}/${m.total} bytes (${pct}%)`+(m.err?` · err ${m.err}`:"");}
 
 const j=u=>fetch(u).then(r=>r.json()).catch(()=>null);
 
@@ -349,6 +414,8 @@ function addrName(hex){hex=hex.toLowerCase();
   if(hex==="0xffff")return "broadcast";
   const d=devices.find(x=>x.addr===hex);return d&&d.name?d.name:null;}
 function annotate(s){return (s||"").replace(/0x[0-9a-fA-F]{4}/g,m=>{const n=addrName(m);return n?`${n} (${m})`:m;});}
+// Friendly name if known, else the raw address (used in tables/chips everywhere).
+function addrLabel(hex){return addrName(hex)||hex;}
 
 // Seed the live-frames table from the DB (the WS only carries frames that arrive
 // after the page loads — so without this, earlier captures show as an empty list).
@@ -361,6 +428,7 @@ async function loadFrames(){const p=await j("/api/frames");if(!p)return;
 async function loadDevices(){const d=await j("/api/devices");if(!d)return;devices=d;
   document.getElementById("d-cnt").textContent=d.length;
   document.getElementById("m-dev").textContent=d.length;
+  fillIsolate();fillAtDevices();
   document.getElementById("devices").innerHTML=d.map(x=>{
    const role=x.role==="coordinator"?'<span class="tag coord">coord</span>':(x.role?`<span class="tag">${x.role}</span>`:"");
    const q=rssiQ(x.last_rssi);
@@ -385,20 +453,30 @@ let peakByCh={};
 const edValid=v=>v!=null&&v>-120;               // -128/-127 = no-data/err sentinels
 const edHeight=v=>edValid(v)?Math.max(2,Math.min(100,(v+100)*1.6)):3;
 const edClass=v=>!edValid(v)?"nodata":v>-60?"weak":v>-80?"fair":"good";
-const wifiOf={11:"W1",12:"W1",13:"W1",16:"W6",17:"W6",18:"W6",21:"W11",22:"W11",23:"W11"};
+// 2.4 GHz Wi-Fi channels 1–13 positioned by frequency across the Zigbee axis.
+// Each Wi-Fi channel is 22 MHz wide (≈4.4 Zigbee-channel columns); ch 1/6/11 are
+// the non-overlapping ones and are emphasised. Rows stagger to reduce overlap.
+function wifiRuler(){const cols=16,bandW=4.4/cols*100;let s="";
+  for(let n=1;n<=13;n++){
+    const cx=(1.9+(n-1))/cols*100,left=Math.max(0,cx-bandW/2),w=Math.min(bandW,100-left);
+    const tier=(n-1)%3,top=1+tier*13,major=(n===1||n===6||n===11);
+    s+=`<div title="Wi-Fi channel ${n} (2.4 GHz)" style="position:absolute;left:${left.toFixed(2)}%;width:${w.toFixed(2)}%;top:${top}px;height:12px;border-radius:6px;background:${major?"var(--accent)":"#3a6ea5"};opacity:${major?.5:.24};display:flex;align-items:center;justify-content:center;overflow:hidden">`+
+      `<span style="font-size:9px;font-weight:${major?700:400};color:${major?"#eaf2ff":"#cfe0f5"}">${n}</span></div>`;}
+  return s;}
+document.getElementById("wifirow").innerHTML=wifiRuler();
 async function loadSpectrum(){const s=await j("/api/spectrum");if(!s)return;
   const ed={};s.forEach(x=>{if(ed[x.channel]==null)ed[x.channel]=x.ed_dbm;}); // samples are ts-desc → first=latest
-  let h="",wr="",anyValid=false,sawErr=false;
+  let h="",anyValid=false,sawErr=false;
   for(let c=11;c<=26;c++){const v=ed[c],ok=edValid(v);
     if(ok){anyValid=true;peakByCh[c]=Math.max(peakByCh[c]??-200,v);}
     if(v===-127)sawErr=true;
     const pk=peakByCh[c];
-    const peak=(ok&&pk!=null&&edValid(pk))?`<div class=peak style="bottom:${edHeight(pk)}%"></div>`:"";
+    // Only draw the peak-hold marker when the held peak is meaningfully ABOVE the
+    // live level — so "Clear peaks" visibly removes them (they reappear on a spike).
+    const peak=(ok&&pk!=null&&edValid(pk)&&pk>v+1)?`<div class=peak style="bottom:${edHeight(pk)}%"></div>`:"";
     const lbl=ok?v:(v==null?"":"·");
-    h+=`<div class=bar>${peak}<div class=v>${lbl}</div><div class="fill ${edClass(v)}" style="height:${edHeight(v)}%"></div><span>${c}</span></div>`;
-    wr+=`<div class="wc ${wifiOf[c]?"on":""}">${wifiOf[c]||""}</div>`;}
+    h+=`<div class=bar>${peak}<div class=v>${lbl}</div><div class="fill ${edClass(v)}" style="height:${edHeight(v)}%"></div><span>${c}</span></div>`;}
   document.getElementById("spectrum").innerHTML=h;
-  document.getElementById("wifirow").innerHTML=wr;
   const st=document.getElementById("sp-status");
   if(st)st.innerHTML=anyValid?"":Object.keys(ed).length
     ?(sawErr?"⚠ energy-detect rejected by the radio (busy/bad state) — see device log":"⚠ energy-detect returned no data — reflash the latest firmware (symbol-units fix), then Scan")
@@ -420,12 +498,53 @@ function renderWaterfall(samples){
       const r=Math.round(40+t*200),g=Math.round(180-t*150),b=Math.round(90-t*70);
       ctx.fillStyle=`rgb(${r},${g},${b})`;ctx.fillRect((c-11)*cw,row*rh,cw,Math.ceil(rh));}});
 }
+let dgHidden={}; // category → hidden?
 async function loadDiagnostics(){const d=await j("/api/diagnostics");if(!d)return;
-  document.getElementById("dg-cnt").textContent=d.filter(x=>x.severity!=="info").length;
-  document.getElementById("diagnostics").innerHTML=d.map(x=>
-   `<div class="diag ${x.severity}"><span class=sev>${x.severity}</span><span class=cat>${x.category}</span>`+
-   `<span class=msg>${x.message}</span>${x.addr?`<span class="addr mono" data-addr="${x.addr}">${x.addr}</span>`:""}</div>`).join("");
-  document.querySelectorAll("#diagnostics .addr").forEach(a=>a.onclick=()=>showDetail(a.dataset.addr));}
+  // category checkboxes (persist choices in dgHidden)
+  const cats=[...new Set(d.map(x=>x.category))].sort();
+  document.getElementById("dg-filter").innerHTML=cats.map(c=>{
+    const n=d.filter(x=>x.category===c).length;
+    return `<label><input type=checkbox data-cat="${c}" ${dgHidden[c]?"":"checked"}> ${c} <span class=dim>(${n})</span></label>`;}).join("");
+  document.querySelectorAll("#dg-filter input").forEach(cb=>cb.onchange=()=>{
+    dgHidden[cb.dataset.cat]=!cb.checked;
+    savePref("dg_hidden",Object.keys(dgHidden).filter(k=>dgHidden[k]).join(","));loadDiagnostics();});
+  const shown=d.filter(x=>!dgHidden[x.category]);
+  const rank={critical:0,error:1,warning:2,notice:3,info:4};
+  shown.sort((a,b)=>(rank[a.severity]??9)-(rank[b.severity]??9));
+  document.getElementById("dg-cnt").textContent=shown.filter(x=>["critical","error","warning"].includes(x.severity)).length;
+  dgShown=shown;
+  document.getElementById("diagnostics").innerHTML=shown.map((x,i)=>
+   `<div class="diag ${x.severity}" data-di="${i}" style="cursor:pointer">`+
+   `<span class=sev>${x.severity}</span><span class=cat>${x.category}</span>`+
+   `<span class=msg>${annotate(x.message)}</span>`+
+   `${x.addr?`<span class="addr" data-addr="${x.addr}" title="${x.addr}">${addrLabel(x.addr)}</span>`:""}</div>`).join("")
+   ||'<div class=dim>nothing to show (all categories hidden)</div>';
+  document.querySelectorAll("#diagnostics .diag").forEach(el=>el.onclick=ev=>{
+    const a=ev.target.closest(".addr");
+    if(a){ev.stopPropagation();showDetail(a.dataset.addr);return;}
+    showDiag(dgShown[+el.dataset.di]);});}
+let dgShown=[];
+// Click a diagnostic → a detailed drawer (severity, full message, device context).
+async function showDiag(d){if(!d)return;selected=null;
+  document.getElementById("d-title").textContent=d.category;
+  let h=`<div class=kv>`+
+    `<div>Severity</div><div><span class="diag ${d.severity}" style="display:inline-block;padding:2px 10px;border-radius:6px"><span class=sev>${d.severity}</span></span></div>`+
+    `<div>Category</div><div>${d.category}</div>`+
+    `<div>Details</div><div>${annotate(d.message)}</div>`;
+  if(d.addr){const dev=devices.find(x=>x.addr===d.addr)||{addr:d.addr};
+    h+=`<div>Device</div><div class=mono>${dev.name?dev.name+' · ':''}${d.addr}</div>`+
+       `<div>Sniffer signal ⌖</div><div>${dev.last_rssi??'?'} dBm · <span class="${qClass(rssiQ(dev.last_rssi))}">${rssiQ(dev.last_rssi)!=null?rssiQ(dev.last_rssi)+'%':'?'}</span></div>`+
+       `<div>Network</div><div>${dev.net_lqi!=null?'LQI <span class="'+lqiClass(dev.net_lqi)+'">'+dev.net_lqi+'</span> <span class=dim>(coordinator)</span>':'<span class=dim>— connect Home Assistant</span>'}</div></div>`+
+       `<div style="margin:10px 0"><button id="dg-open" style="font-size:12px;padding:4px 12px">Open full device details →</button></div>`;
+    const msgs=await j(`/api/devices/${d.addr}/messages`)||[];
+    h+=`<h2 style="font-size:12px;color:var(--dim);text-transform:uppercase">Recent messages (${msgs.length})</h2>`+
+       `<table><thead><tr><th>Time</th><th>RSSI</th><th>Type</th><th>Summary</th></tr></thead><tbody>`+
+       msgs.slice(0,20).map(m=>`<tr><td class=dim>${fmtTime(m.ts)}</td><td>${m.rssi}</td><td>${m.type}${m.decrypted?' <span class=lock>🔓</span>':''}</td><td>${annotate(m.summary)}</td></tr>`).join("")+
+       `</tbody></table>`;
+  } else h+=`</div>`;
+  document.getElementById("dbody").innerHTML=h;
+  const ob=document.getElementById("dg-open");if(ob)ob.onclick=()=>showDetail(d.addr);
+  document.getElementById("drawer").classList.add("open");}
 async function loadConn(){
   const s=await j("/api/stats");const e=document.getElementById("connstats");
   if(s){
@@ -456,10 +575,16 @@ function bindRows(){document.querySelectorAll("#devices tr.click").forEach(tr=>
 // ---- routing graph: radial BFS from the coordinator, LQI-coloured edges ----
 // Force-directed routing graph (HA-style physics) with cached, stable positions.
 let rgScale=1,rgTx=0,rgTy=0,showLeaves=true,rgPos={},rgSig="";
+let rgSx=1,rgSy=1,rgIsolate="",rgShowNetLqi=false,rgDist={},rgNetLqi={};
 const RGCX=300,RGCY=170;
 let rgNodes=[],rgEdges=[],rgNameOf={},rgDeg={},rgAlpha=0,rgDirty=true,rgStarted=false;
-// renderGraph() now just (re)builds topology from `routing`; a continuous rAF
-// loop runs the physics and draws, so the layout is live and reacts to zoom.
+function bfsPath(adj,from,to){if(from===to)return [from];
+  const prev=new Map([[from,null]]),q=[from];
+  while(q.length){const n=q.shift();for(const m of (adj.get(n)||[])){if(!prev.has(m)){prev.set(m,n);q.push(m);}}}
+  if(!prev.has(to))return null;
+  const path=[];for(let c=to;c!=null;c=prev.get(c))path.push(c);return path;}
+// renderGraph() (re)builds topology from `routing`; a continuous rAF loop runs
+// the physics and draws, so the layout is live and reacts to zoom/spacing.
 function renderGraph(){
   const svg=document.getElementById("routing");
   const adj=new Map(),nodes=new Set(),nameOf={},deg={};
@@ -470,14 +595,24 @@ function renderGraph(){
   if(!nodes.size){svg.innerHTML='<text x="300" y="170" fill="#8b97a3" text-anchor="middle">waiting for traffic…</text>';rgNodes=[];return;}
   nodes.add(COORD);
   for(const a of nodes)deg[a]=(adj.get(a)||new Set()).size;
+  rgNetLqi={};devices.forEach(d=>{if(d.net_lqi!=null)rgNetLqi[d.addr]=d.net_lqi;});
   let shown=new Set(nodes);
   if(!showLeaves)shown=new Set([...nodes].filter(a=>a===COORD||deg[a]>1));
-  // Every endpoint with no observed link gets a dashed "parent unknown" line to
-  // the coordinator so nothing floats unconnected.
+  // Isolate: show only the selected device's path back to the coordinator.
+  if(rgIsolate&&nodes.has(rgIsolate)){
+    const path=bfsPath(adj,rgIsolate,COORD);
+    shown=new Set(path&&path.length?path:[rgIsolate,COORD]);}
+  // Every shown endpoint with no observed link gets a dashed "parent unknown"
+  // line to the coordinator so nothing floats unconnected.
   const edges=[];
   (routing.edges||[]).forEach(e=>{if(shown.has(e.src)&&shown.has(e.dst))
-    edges.push({src:e.src,dst:e.dst,rssi:e.rssi,dashed:false});});
+    edges.push({src:e.src,dst:e.dst,rssi:e.rssi,lqi:e.lqi,dashed:false});});
   for(const a of shown){if(a!==COORD&&deg[a]===0)edges.push({src:a,dst:COORD,dashed:true});}
+  // BFS hop-distance from the coordinator (to pick the "child" end of each link).
+  rgDist={};rgDist[COORD]=0;{const q=[COORD];const a2=new Map();
+    edges.forEach(e=>{(a2.get(e.src)||a2.set(e.src,new Set()).get(e.src)).add(e.dst);
+      (a2.get(e.dst)||a2.set(e.dst,new Set()).get(e.dst)).add(e.src);});
+    while(q.length){const n=q.shift();for(const m of (a2.get(n)||[]))if(rgDist[m]==null){rgDist[m]=rgDist[n]+1;q.push(m);}}}
   const arr=[...shown];
   const sig=arr.slice().sort().join()+"|"+edges.map(e=>e.src+">"+e.dst).sort().join();
   rgNodes=arr;rgEdges=edges;rgNameOf=nameOf;rgDeg=deg;
@@ -497,8 +632,10 @@ function rgStep(){const N=rgNodes,P=rgPos;
   rgEdges.forEach(e=>{const A=P[e.src],B=P[e.dst];if(!A||!B)return;
     let dx=B.x-A.x,dy=B.y-A.y,d=Math.sqrt(dx*dx+dy*dy)+0.01,k=(d-80)*0.05,fx=dx/d*k,fy=dy/d*k;
     A.vx+=fx;A.vy+=fy;B.vx-=fx;B.vy-=fy;});
-  N.forEach(a=>{const Q=P[a];Q.vx+=(RGCX-Q.x)*0.01;Q.vy+=(RGCY-Q.y)*0.015;
-    if(a!==COORD){Q.x+=Q.vx*rgAlpha*0.5;Q.y+=Q.vy*rgAlpha*0.5;}});
+  N.forEach(a=>{const Q=P[a];
+    if(a===COORD||Q.fixed){Q.vx=Q.vy=0;return;} // pinned/dragged nodes stay put
+    Q.vx+=(RGCX-Q.x)*0.01;Q.vy+=(RGCY-Q.y)*0.015;
+    Q.x+=Q.vx*rgAlpha*0.5;Q.y+=Q.vy*rgAlpha*0.5;});
   if(P[COORD]){P[COORD].x=RGCX;P[COORD].y=RGCY;P[COORD].vx=P[COORD].vy=0;}
   rgAlpha*=0.97;
 }
@@ -507,19 +644,32 @@ function rgFrame(){
   if(rgDirty){rgDraw();rgDirty=false;}
   requestAnimationFrame(rgFrame);
 }
-function rgDraw(){const svg=document.getElementById("routing");if(!rgNodes.length)return;
+const rgPX=p=>({x:RGCX+(p.x-RGCX)*rgSx,y:RGCY+(p.y-RGCY)*rgSy}); // apply X/Y spacing
+function rgDraw(){const svg=document.getElementById("routing");if(!rgNodes.length){svg.innerHTML="";return;}
   const fs=(11/rgScale).toFixed(1),sw=(1.6/rgScale).toFixed(2);
   let s="";
-  rgEdges.forEach(e=>{const a=rgPos[e.src],b=rgPos[e.dst];if(!a||!b)return;
+  rgEdges.forEach(e=>{const A=rgPos[e.src],B=rgPos[e.dst];if(!A||!B)return;
+    const a=rgPX(A),b=rgPX(B);
     const col=e.dashed?"#3a4452":qColor(rssiQ(e.rssi));
     const dash=e.dashed?` stroke-dasharray="${(4/rgScale).toFixed(1)} ${(4/rgScale).toFixed(1)}"`:"";
-    s+=`<line x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}" stroke="${col}" stroke-width="${sw}"${dash} opacity=".6"/>`;});
-  for(const a of rgNodes){const p=rgPos[a];if(!p)continue;
+    s+=`<line x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}" stroke="${col}" stroke-width="${sw}"${dash} opacity=".6"/>`;
+    if(rgShowNetLqi&&!e.dashed){ // label = sniffer LQI ⌖ / coordinator (HA) LQI
+      const child=(rgDist[e.src]??99)>=(rgDist[e.dst]??99)?e.src:e.dst;
+      const net=rgNetLqi[child],snf=e.lqi;
+      const label=(snf!=null?snf:"–")+"/"+(net!=null?net:"–");
+      const col=document.body.classList.contains("light")?"#1a2029":(net!=null?lqiColor(net):"#c9d4e0");
+      const st=document.body.classList.contains("light")?"#ffffff":"#0d1117";
+      s+=`<text x="${((a.x+b.x)/2).toFixed(1)}" y="${((a.y+b.y)/2).toFixed(1)}" font-size="${(9/rgScale).toFixed(1)}" fill="${col}" text-anchor="middle" stroke="${st}" stroke-width="${(2.5/rgScale).toFixed(2)}" paint-order="stroke">${label}</text>`;}
+  });
+  const light=document.body.classList.contains("light");
+  const lblc=light?"#39434f":"#aeb9c4",stroke=light?"#ffffff":"#0d1117";
+  for(const a of rgNodes){const P=rgPos[a];if(!P)continue;const p=rgPX(P);
     const isC=a===COORD,leaf=rgDeg[a]<=1,r=(isC?9:(leaf?4.5:6.5))/Math.sqrt(rgScale),
-      fill=isC?"#58a6ff":(rgDeg[a]===0?"#f85149":(leaf?"#8b97a3":"#c9d4e0"));
+      fill=isC?"#58a6ff":(rgDeg[a]===0?"#f85149":(leaf?"#8b97a3":(light?"#7b8794":"#c9d4e0")));
     const lbl=isC?"coordinator":(rgNameOf[a]||a);
-    s+=`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${r.toFixed(1)}" fill="${fill}" stroke="#0d1117" stroke-width="${sw}" data-addr="${a}"/>`;
-    s+=`<text x="${p.x.toFixed(1)}" y="${(p.y-r-3/rgScale).toFixed(1)}" font-size="${fs}" fill="#aeb9c4" text-anchor="middle">${lbl}</text>`;}
+    if(P.fixed)s+=`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${(r+2.5).toFixed(1)}" fill="none" stroke="#58a6ff" stroke-width="${(1.2/rgScale).toFixed(2)}" opacity=".8"/>`;
+    s+=`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${r.toFixed(1)}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" data-addr="${a}"/>`;
+    s+=`<text x="${p.x.toFixed(1)}" y="${(p.y-r-3/rgScale).toFixed(1)}" font-size="${fs}" fill="${lblc}" text-anchor="middle">${lbl}</text>`;}
   svg.innerHTML=`<g id="rg-g" transform="translate(${rgTx},${rgTy}) scale(${rgScale})">${s}</g>`;
 }
 function bindGraphZoom(){const svg=document.getElementById("routing");
@@ -532,12 +682,25 @@ function bindGraphZoom(){const svg=document.getElementById("routing");
     const r=svg.getBoundingClientRect(),mx=(e.clientX-r.left)/r.width*600,my=(e.clientY-r.top)/r.height*340;
     rgTx=mx-(mx-rgTx)*(ns/rgScale);rgTy=my-(my-rgTy)*(ns/rgScale);rgScale=ns;
     rgReheat(0.4);},{passive:false}); // nudge the physics so it re-spaces as you zoom
-  let drag=null;
-  svg.addEventListener("mousedown",e=>{drag={x:e.clientX,y:e.clientY,tx:rgTx,ty:rgTy};moved=false;svg.style.cursor="grabbing";});
-  window.addEventListener("mousemove",e=>{if(!drag)return;const r=svg.getBoundingClientRect();
+  let drag=null,dragNode=null;
+  // Convert a mouse event to routing-graph (rgPos) coordinates, undoing the
+  // pan/zoom transform and the X/Y spacing so a grabbed node follows the cursor.
+  function mouseToNode(e){const r=svg.getBoundingClientRect();
+    const vx=(e.clientX-r.left)/r.width*600,vy=(e.clientY-r.top)/r.height*340;
+    const gx=(vx-rgTx)/rgScale,gy=(vy-rgTy)/rgScale;
+    return {x:RGCX+(gx-RGCX)/(rgSx||1),y:RGCY+(gy-RGCY)/(rgSy||1)};}
+  svg.addEventListener("mousedown",e=>{moved=false;
+    const c=e.target.closest("circle[data-addr]");
+    if(c&&c.dataset.addr!==COORD){dragNode=c.dataset.addr;svg.style.cursor="grabbing";e.preventDefault();return;}
+    drag={x:e.clientX,y:e.clientY,tx:rgTx,ty:rgTy};svg.style.cursor="grabbing";e.preventDefault();});
+  window.addEventListener("mousemove",e=>{
+    if(dragNode){const P=rgPos[dragNode];if(P){const p=mouseToNode(e);
+      P.x=p.x;P.y=p.y;P.fixed=true;P.vx=P.vy=0;}
+      moved=true;rgReheat(0.35);rgDirty=true;return;}   // pull it out; rest re-space
+    if(!drag)return;const r=svg.getBoundingClientRect();
     if(Math.abs(e.clientX-drag.x)+Math.abs(e.clientY-drag.y)>3)moved=true;
     rgTx=drag.tx+(e.clientX-drag.x)/r.width*600;rgTy=drag.ty+(e.clientY-drag.y)/r.height*340;rgDirty=true;});
-  window.addEventListener("mouseup",()=>{drag=null;svg.style.cursor="grab";});}
+  window.addEventListener("mouseup",()=>{drag=null;dragNode=null;svg.style.cursor="grab";});}
 
 // ---- device detail drawer ----
 async function showDetail(addr){if(!addr||addr==="—")return;selected=addr;
@@ -613,6 +776,8 @@ function togglePause(){paused=!paused;
   const b=document.getElementById("pause2");b.classList.toggle("on",paused);b.textContent=paused?"▶ paused":"⏸";}
 const post=u=>fetch(u,{method:"POST"});
 const on=(id,fn)=>document.getElementById(id).onclick=fn;
+// Persist a web-UI preference to the config YAML (server-side).
+const savePref=(k,v)=>fetch(`/api/prefs?key=${encodeURIComponent(k)}&value=${encodeURIComponent(v)}`,{method:"POST"});
 on("c-start",async()=>{if(!await gateFn("capture"))return;capStopped=false;post("/api/start");});
 on("c-stop",()=>{capStopped=true;updateCapInd();post("/api/stop");});
 on("c-restart",async()=>{if(!await gateFn("capture"))return;capStopped=false;post("/api/start");});
@@ -631,14 +796,29 @@ let spCont=false;
 on("sp-cont",async()=>{if(!spCont&&!await gateFn("spectrum"))return;spCont=!spCont;const b=document.getElementById("sp-cont");
   b.classList.toggle("on",spCont);b.textContent=spCont?"Stop continuous":"Continuous";
   post("/api/mode?m="+(spCont?2:1));});
-on("sp-peakclear",()=>{peakByCh={};});
+on("sp-peakclear",()=>{peakByCh={};loadSpectrum();});
 on("c-savekey",()=>post("/api/save_key"));
 document.querySelectorAll("[data-exp]").forEach(b=>b.onclick=()=>{
   const fmt=document.getElementById("exp-fmt").value;
   window.open(`/api/export?what=${b.dataset.exp}&format=${fmt}`,"_blank");});
 on("rg-leaves",()=>{showLeaves=!showLeaves;
-  document.getElementById("rg-leaves").classList.toggle("on",showLeaves);renderGraph();});
-on("rg-reset",()=>{rgScale=1;rgTx=0;rgTy=0;rgReheat(0.6);});
+  document.getElementById("rg-leaves").classList.toggle("on",showLeaves);renderGraph();savePref("show_leaves",showLeaves?"1":"0");});
+on("rg-reset",()=>{rgScale=1;rgTx=0;rgTy=0;rgSx=1;rgSy=1;
+  for(const k in rgPos)delete rgPos[k].fixed; // release any dragged/pinned nodes
+  document.getElementById("rg-sx").value=1;document.getElementById("rg-sy").value=1;rgReheat(0.9);
+  savePref("rg_sx","1");savePref("rg_sy","1");});
+document.getElementById("rg-sx").oninput=e=>{rgSx=+e.target.value;rgDirty=true;};
+document.getElementById("rg-sy").oninput=e=>{rgSy=+e.target.value;rgDirty=true;};
+document.getElementById("rg-isolate").onchange=e=>{rgIsolate=e.target.value;rgSig="";renderGraph();rgReheat(1);};
+on("rg-netlqi",()=>{rgShowNetLqi=!rgShowNetLqi;
+  document.getElementById("rg-netlqi").classList.toggle("on",rgShowNetLqi);rgDirty=true;savePref("net_lqi",rgShowNetLqi?"1":"0");});
+function deviceOpts(){return devices.slice().sort((a,b)=>(a.name||a.addr).localeCompare(b.name||b.addr))
+    .map(d=>`<option value="${d.addr}">${d.name?d.name+" ("+d.addr+")":d.addr}</option>`).join("");}
+function fillIsolate(){const sel=document.getElementById("rg-isolate");if(!sel)return;
+  const cur=sel.value;sel.innerHTML='<option value="">All devices</option>'+deviceOpts();sel.value=cur;}
+function fillAtDevices(){const sel=document.getElementById("at-device");if(!sel)return;
+  const cur=sel.value;sel.innerHTML='<option value="">— pick —</option>'+deviceOpts();sel.value=cur;}
+document.getElementById("at-device").onchange=e=>{if(e.target.value)document.getElementById("at-addr").value=e.target.value;};
 on("ha-connect",()=>{const h=document.getElementById("ha-host").value.trim(),t=document.getElementById("ha-token").value.trim();
   if(h&&t)fetch(`/api/ha_connect?host=${encodeURIComponent(h)}&token=${encodeURIComponent(t)}`,{method:"POST"});});
 on("raw-send",()=>{let r=document.getElementById("raw-type").value.trim();
@@ -675,11 +855,11 @@ async function loadActive(){
   const sc=await j("/api/schedules");
   document.getElementById("at-sched").innerHTML=((sc&&sc.schedules)||[]).map(s=>{
     const rate=s.runs?Math.round(s.acks/s.runs*100):null;
-    return `<tr><td class=mono>${s.target}</td><td>${s.interval_s}s</td><td>${s.runs}</td><td class="${rate==null?'dim':rate>=90?'good':rate>=50?'fair':'weak'}">${s.acks}${rate!=null?' ('+rate+'%)':''}</td><td><button data-delsched="${s.id}" style="font-size:10px;padding:1px 6px">✕</button></td></tr>`;
+    return `<tr><td title="${s.target}">${addrLabel(s.target)}</td><td>${s.interval_s}s</td><td>${s.runs}</td><td class="${rate==null?'dim':rate>=90?'good':rate>=50?'fair':'weak'}">${s.acks}${rate!=null?' ('+rate+'%)':''}</td><td><button data-delsched="${s.id}" style="font-size:10px;padding:1px 6px">✕</button></td></tr>`;
   }).join("")||'<tr><td colspan=5 class=dim>no schedules — add one above</td></tr>';
   const ph=await j("/api/probe_history");
   document.getElementById("at-results").innerHTML=((ph&&ph.history)||[]).slice(0,40).map(h=>
-    `<tr><td class=dim>${fmtTime(h.ts)}</td><td class=mono>${h.target}</td><td>${h.radio}</td><td class="${h.acked?'good':'weak'}">${h.acked?'✓ ACK':'✗ no ACK'}</td><td>${h.acked?h.rssi:''}</td></tr>`).join("")
+    `<tr><td class=dim>${fmtTime(h.ts)}</td><td title="${h.target}">${addrLabel(h.target)}</td><td>${h.radio}</td><td class="${h.acked?'good':'weak'}">${h.acked?'✓ ACK':'✗ no ACK'}</td><td>${h.acked?h.rssi:''}</td></tr>`).join("")
     ||'<tr><td colspan=5 class=dim>no probes yet</td></tr>';
 }
 async function loadRadios(){const r=await j("/api/radios");if(!r)return;
@@ -690,6 +870,11 @@ async function loadRadios(){const r=await j("/api/radios");if(!r)return;
     ?(dup.length?`⚠ radios share id ${dup.join(", ")} — give each a unique ID so roles target the right one`
       :`${rs.length} radio(s) connected · roles applied live and saved to the config`)
     :"no radios connected — plug in up to 4 C6 dongles (pass --port for each)";
+  const osel=document.getElementById("ota-radio");
+  if(osel){const cur=osel.value;
+    osel.innerHTML='<option value="">auto (single radio)</option>'+
+      rs.map(x=>`<option value="${x.port}">radio ${x.radio_id} · …${x.port.slice(-6)}</option>`).join("");
+    osel.value=cur;}
   document.getElementById("radios-tbl").innerHTML=rs.map(x=>{
     const cur=x.role||"any";
     const roleCell=x.radio_id<0?'<span class=dim>identifying…</span>'
@@ -709,13 +894,20 @@ document.getElementById("radios-tbl").addEventListener("click",e=>{
   const b=e.target.closest("button.ridset");if(!b)return;
   const inp=b.parentElement.querySelector("input.rid");
   post(`/api/set_radio_id?port=${encodeURIComponent(b.dataset.port)}&id=${inp.value}`).then(()=>setTimeout(loadRadios,700));});
-on("at-probe",async()=>{const a=document.getElementById("at-addr").value.trim();if(!a)return;
+on("at-probe",async()=>{const a=document.getElementById("at-addr").value.trim();
+  if(!a){alert("Enter a device short address to probe (e.g. 0x1234)");return;}
   const p=document.getElementById("at-radio").value;
-  if(!p&&!await gateFn("probe"))return;
-  post(`/api/probe?addr=${encodeURIComponent(a)}${p?'&port='+encodeURIComponent(p):''}`).then(()=>setTimeout(loadActive,700));});
-on("at-schedule",()=>{const a=document.getElementById("at-addr").value.trim();if(!a)return;
+  const r=(atRadios||[]).find(x=>x.port===p);
+  if(r&&r.mode===2&&!confirm("⚠ That radio is running an ED sweep; a probe briefly interrupts it. Continue?"))return;
+  const res=await fetch(`/api/probe?addr=${encodeURIComponent(a)}${p?"&port="+encodeURIComponent(p):""}`,
+    {method:"POST"}).then(x=>x.json()).catch(()=>null);
+  if(res&&res.sent===false)alert("Probe not sent — no radio available (check the radio selection).");
+  setTimeout(loadActive,800);});
+on("at-schedule",()=>{const a=document.getElementById("at-addr").value.trim();
+  if(!a){alert("Enter a device short address to schedule (e.g. 0x1234)");return;}
   const iv=+document.getElementById("at-interval").value||60,p=document.getElementById("at-radio").value;
-  post(`/api/schedules?addr=${encodeURIComponent(a)}&interval=${iv}${p?'&port='+encodeURIComponent(p):''}`).then(loadActive);});
+  post(`/api/schedules?addr=${encodeURIComponent(a)}&interval=${iv}${p?'&port='+encodeURIComponent(p):''}`)
+    .then(()=>{loadActive();document.getElementById("at-addr").focus();});});
 document.getElementById("at-sched").onclick=e=>{const b=e.target.closest("[data-delsched]");
   if(b)fetch("/api/schedules?id="+b.dataset.delsched,{method:"DELETE"}).then(loadActive);};
 
@@ -745,13 +937,43 @@ const mq=window.matchMedia("(prefers-color-scheme: light)");
 function applyTheme(t){const light=(t==="day")||(t==="auto"&&mq.matches);
   document.body.classList.toggle("light",light);}
 function setTheme(t){localStorage.setItem("zbtheme",t);applyTheme(t);
-  const s=document.getElementById("theme-sel");if(s)s.value=t;}
-{const t=localStorage.getItem("zbtheme")||"night";setTheme(t);}
-document.getElementById("theme-sel").onchange=e=>setTheme(e.target.value);
+  document.querySelectorAll("#theme-seg button").forEach(b=>b.classList.toggle("on",b.dataset.theme===t));}
+document.querySelectorAll("#theme-seg button").forEach(b=>b.onclick=()=>{setTheme(b.dataset.theme);savePref("theme",b.dataset.theme);});
+{const t=localStorage.getItem("zbtheme")||"night";setTheme(t);}   // instant (no flash); server pref applied by initPrefs
 mq.addEventListener("change",()=>{if((localStorage.getItem("zbtheme")||"night")==="auto")applyTheme("auto");});
-on("c-reconnect",()=>post("/api/reconnect"));
 
-ws();bindGraphZoom();loadActive();loadFrames();
+// Load saved web-UI preferences from the config and apply them to the controls.
+async function initPrefs(){const p=await j("/api/prefs")||{};
+  if(p.theme)setTheme(p.theme);
+  if(p.rg_sx){rgSx=+p.rg_sx;const e=document.getElementById("rg-sx");if(e)e.value=rgSx;}
+  if(p.rg_sy){rgSy=+p.rg_sy;const e=document.getElementById("rg-sy");if(e)e.value=rgSy;}
+  if(p.show_leaves!=null){showLeaves=p.show_leaves!=="0";document.getElementById("rg-leaves").classList.toggle("on",showLeaves);}
+  if(p.net_lqi==="1"){rgShowNetLqi=true;document.getElementById("rg-netlqi").classList.add("on");}
+  if(p.sp_dwell){const e=document.getElementById("sp-dwell");if(e)e.value=p.sp_dwell;}
+  if(p.exp_fmt){const e=document.getElementById("exp-fmt");if(e)e.value=p.exp_fmt;}
+  if(p.dg_hidden){dgHidden={};p.dg_hidden.split(",").forEach(c=>{if(c)dgHidden[c]=true;});}
+  rgSig="";rgDirty=true;}
+// slider/select changes → persist
+document.getElementById("rg-sx").addEventListener("change",e=>savePref("rg_sx",e.target.value));
+document.getElementById("rg-sy").addEventListener("change",e=>savePref("rg_sy",e.target.value));
+document.getElementById("sp-dwell").addEventListener("change",e=>savePref("sp_dwell",e.target.value));
+document.getElementById("exp-fmt").addEventListener("change",e=>savePref("exp_fmt",e.target.value));
+on("c-reconnect",()=>post("/api/reconnect"));
+on("ota-go",async()=>{const f=document.getElementById("ota-file").files[0];
+  if(!f){alert("Choose a firmware .bin file first");return;}
+  const target=document.getElementById("ota-target").value;
+  const port=document.getElementById("ota-radio").value;
+  if(!confirm(`Flash "${f.name}" (${(f.size/1024).toFixed(0)} KB) to target ${target}?\n\nDo NOT unplug the device during the update.`))return;
+  document.getElementById("ota-prog").style.display="block";
+  document.getElementById("ota-stat").textContent="uploading…";
+  document.getElementById("ota-bar").style.width="0%";
+  const buf=await f.arrayBuffer();
+  const r=await fetch(`/api/ota?target=${target}${port?"&port="+encodeURIComponent(port):""}`,
+    {method:"POST",body:buf}).then(x=>x.json()).catch(()=>null);
+  if(r&&r.ok===false)document.getElementById("ota-stat").textContent="⚠ "+(r.reason||"upload failed");
+  else if(r)document.getElementById("ota-stat").textContent=`sent ${r.size} bytes (crc ${r.crc}) — flashing…`;});
+
+ws();bindGraphZoom();loadActive();loadFrames();initPrefs();
 setInterval(()=>{loadDevices();loadRouting();loadIncidents();loadSpectrum();loadDiagnostics();loadHAStatus();loadConn();loadActive();loadRadios();if(selected)showDetail(selected);},3000);
 setInterval(loadConn,1000);
 setInterval(render,500);

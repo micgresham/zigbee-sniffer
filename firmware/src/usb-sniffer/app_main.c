@@ -20,7 +20,10 @@
 #include "radio_capture.h"
 #include "ed_scan.h"
 #include "probe.h"
+#include "ota.h"
+#include "standalone/spi_master.h"
 #include "transport_usb.h"
+#include "esp_system.h"
 
 static const char *TAG = "usb-sniffer";
 
@@ -100,6 +103,49 @@ static void probe_cb(uint16_t target, bool acked, int8_t rssi, uint8_t lqi)
     send_frame(MSG_PROBE_RESULT, p, sizeof(p));
 }
 
+// OTA progress → MSG_OTA_STATUS (target 0 = this C6).
+static void send_ota_status(uint8_t target)
+{
+    uint8_t p[11];
+    size_t n = 0;
+    p[n++] = target;
+    p[n++] = ota_state();
+    uint32_t r = ota_received(), t = ota_total();
+    for (int i = 0; i < 4; i++) p[n++] = (uint8_t)(r >> (8 * i));
+    for (int i = 0; i < 4; i++) p[n++] = (uint8_t)(t >> (8 * i));
+    p[n++] = ota_err();
+    send_frame(MSG_OTA_STATUS, p, (uint16_t)n);
+}
+
+static volatile bool s_reboot_pending;
+
+// Relay a satellite's OTA status (arriving over SPI) up to the host.
+static void ota_status_from_sat(uint8_t type, const uint8_t *pl, uint16_t len)
+{
+    if (type == MSG_OTA_STATUS) send_frame(MSG_OTA_STATUS, pl, len);
+}
+
+// Bring up the SPI master on first use (satellites are rarely present, so we
+// don't init it during normal capture — this keeps the USB path untouched).
+static void ensure_spi_master(void)
+{
+    static bool up;
+    if (up) return;
+    spi_master_init(NULL);                 // no frame cb — we only relay OTA
+    spi_master_set_msg_cb(ota_status_from_sat);
+    up = true;
+}
+
+// Re-frame an OTA command and forward it to satellite (target-1) over SPI.
+static void ota_relay(uint8_t target, uint8_t type, const uint8_t *p, uint16_t len)
+{
+    if (target < 1 || target > PRI_SAT_COUNT) return;
+    ensure_spi_master();
+    uint8_t out[ZB_MAX_TX];
+    size_t n = zb_encode(type, p, len, out, sizeof(out));
+    if (n) spi_master_send_to(target - 1, out, n);
+}
+
 // --- command handling ------------------------------------------------------
 
 static void handle_command(uint8_t type, const uint8_t *p, uint16_t len)
@@ -155,6 +201,41 @@ static void handle_command(uint8_t type, const uint8_t *p, uint16_t len)
             probe_send(target, pan);
         }
         send_ack(type, 0);
+        break;
+    case CMD_OTA_BEGIN:
+        if (len >= 9) {
+            uint8_t target = p[0];
+            uint32_t total = (uint32_t)p[1] | (p[2] << 8) | (p[3] << 16) | ((uint32_t)p[4] << 24);
+            uint32_t crc   = (uint32_t)p[5] | (p[6] << 8) | (p[7] << 16) | ((uint32_t)p[8] << 24);
+            if (target == 0) {
+                radio_capture_stop();  // free the radio during flash writes
+                ota_begin(total, crc);
+                send_ota_status(target);
+            } else {
+                ota_relay(target, type, p, len); // forward to a satellite over SPI
+            }
+        }
+        break;
+    case CMD_OTA_DATA:
+        if (len >= 5) {
+            uint8_t target = p[0];
+            if (target == 0) { ota_write(&p[5], len - 5); send_ota_status(target); }
+            else ota_relay(target, type, p, len);
+        }
+        break;
+    case CMD_OTA_END:
+        if (len >= 1) {
+            uint8_t target = p[0];
+            if (target == 0) { if (ota_end() == ESP_OK) s_reboot_pending = true; send_ota_status(target); }
+            else ota_relay(target, type, p, len);
+        }
+        break;
+    case CMD_OTA_ABORT:
+        if (len >= 1) {
+            uint8_t target = p[0];
+            if (target == 0) { ota_abort(); send_ota_status(target); }
+            else ota_relay(target, type, p, len);
+        }
         break;
     case CMD_GET_STATUS:
         send_status();
@@ -239,6 +320,12 @@ void app_main(void)
         if (now - last_status >= 1000000ULL) {
             last_status = now;
             send_status();
+        }
+
+        // Reboot after an OTA completes (let the final status message flush).
+        if (s_reboot_pending) {
+            vTaskDelay(pdMS_TO_TICKS(400));
+            esp_restart();
         }
     }
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"net/http"
 	"sort"
@@ -26,6 +27,14 @@ import (
 	"zbsniff/internal/stats"
 	"zbsniff/internal/store"
 )
+
+// panOf returns the runtime PAN id as an int (0 if unknown).
+func panOf(rt *runtime.Runtime) int {
+	if rt == nil {
+		return 0
+	}
+	return int(rt.Pan())
+}
 
 // panHex renders the runtime PAN id as "0x1234" (or "" if unknown).
 func panHex(rt *runtime.Runtime) string {
@@ -105,6 +114,7 @@ type Server struct {
 	Roles      func() map[int]string          // current radio-id → role map
 	Reconnect  func()                          // force-reinit the serial link
 	About      map[string]any                  // version/build metadata for the About tab
+	Prefs      func() map[string]string        // current web-UI preferences (from config)
 }
 
 // writeCSV writes rows as CSV with a stable, sorted column header.
@@ -161,7 +171,7 @@ func (s *Server) allocate(fn string) (port string, radioID int, ok, interrupt bo
 		return "any"
 	}
 	dedicated := map[string]string{"spectrum": "spectrum", "capture": "sniffer", "probe": "tester"}[fn]
-	capturing := func(r *radios.Radio) bool { return r.Mode == 1 || r.Mode == 3 }
+	capturing := func(r *radios.Radio) bool { return (r.Mode == 1 || r.Mode == 3) && !r.Stopped }
 	conflicts := func(r *radios.Radio) bool {
 		switch fn {
 		case "spectrum":
@@ -203,6 +213,9 @@ func (s *Server) allocate(fn string) (port string, radioID int, ok, interrupt bo
 }
 
 func activity(r *radios.Radio) string {
+	if r.Stopped {
+		return "stopped"
+	}
 	switch r.Mode {
 	case 1, 3:
 		return "capturing"
@@ -324,7 +337,7 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, nz(s.DB.Incidents(200)))
 	})
 	mux.HandleFunc("/api/diagnostics", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, nz(s.DB.Diagnostics()))
+		writeJSON(w, nz(s.DB.Diagnostics(panOf(s.RT))))
 	})
 	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) {
 		if s.Stats != nil {
@@ -344,6 +357,70 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("/api/about", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, s.About)
+	})
+	// Web-UI preferences persisted to the config YAML. GET returns them all;
+	// POST ?key=&value= saves one.
+	mux.HandleFunc("/api/prefs", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			key := r.URL.Query().Get("key")
+			val := r.URL.Query().Get("value")
+			if key != "" && s.SaveConfig != nil {
+				s.SaveConfig(func(c *config.Config) {
+					if c.UIPrefs == nil {
+						c.UIPrefs = map[string]string{}
+					}
+					c.UIPrefs[key] = val
+				})
+			}
+			writeJSON(w, map[string]any{"ok": true})
+			return
+		}
+		p := map[string]string{}
+		if s.Prefs != nil {
+			p = s.Prefs()
+		}
+		writeJSON(w, p)
+	})
+	// Firmware OTA: POST the .bin as the request body. target 0 = this C6,
+	// 1..3 = a satellite (relayed over SPI). Streams chunks in the background;
+	// progress arrives on the WebSocket as {kind:"ota",...}.
+	mux.HandleFunc("/api/ota", func(w http.ResponseWriter, r *http.Request) {
+		target, _ := strconv.Atoi(r.URL.Query().Get("target"))
+		port := r.URL.Query().Get("port")
+		data, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
+		r.Body.Close()
+		if err != nil || len(data) < 1024 {
+			writeJSON(w, map[string]any{"ok": false, "reason": "empty or too-small firmware upload"})
+			return
+		}
+		crc := crc32.ChecksumIEEE(data)
+		send := func(b []byte) {
+			if port != "" {
+				s.SendTo(port, b)
+			} else {
+				s.cmd(b)
+			}
+		}
+		go func() {
+			send(proto.CmdOtaBeginMsg(byte(target), uint32(len(data)), crc))
+			time.Sleep(400 * time.Millisecond) // let esp_ota_begin() erase/prepare
+			// Satellite chunks are relayed over SPI (256-byte transactions), so
+			// keep them small enough to fit one transaction incl. framing.
+			chunk := 512
+			if target != 0 {
+				chunk = 200
+			}
+			for off := 0; off < len(data); off += chunk {
+				end := off + chunk
+				if end > len(data) {
+					end = len(data)
+				}
+				send(proto.CmdOtaDataMsg(byte(target), uint32(off), data[off:end]))
+				time.Sleep(8 * time.Millisecond) // pace flash writes
+			}
+			send(proto.CmdOtaEndMsg(byte(target)))
+		}()
+		writeJSON(w, map[string]any{"ok": true, "size": len(data), "crc": fmt.Sprintf("%08x", crc)})
 	})
 	// Force a serial reconnect (drops the current link; the host reconnects).
 	mux.HandleFunc("/api/reconnect", func(w http.ResponseWriter, r *http.Request) {
@@ -375,7 +452,7 @@ func (s *Server) Handler() http.Handler {
 		case "frames", "packets":
 			rows = s.DB.Packets(20000)
 		case "diagnostics":
-			rows = s.DB.Diagnostics()
+			rows = s.DB.Diagnostics(panOf(s.RT))
 		case "spectrum":
 			rows = s.DB.Spectrum()
 		default:
@@ -532,10 +609,16 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		s.sendFnTo(port, proto.CmdSetModeMsg(proto.ModeCapture), proto.CmdStartMsg())
+		if s.Radios != nil {
+			s.Radios.SetStopped(port, false)
+		}
 		writeJSON(w, map[string]any{"ok": true, "capturing": true})
 	})
 	mux.HandleFunc("/api/stop", func(w http.ResponseWriter, r *http.Request) {
 		s.cmd(proto.CmdStopMsg())
+		if s.Radios != nil {
+			s.Radios.SetStopped("", true) // all radios
+		}
 		writeJSON(w, map[string]any{"stopped": true})
 	})
 	mux.HandleFunc("/api/mode", func(w http.ResponseWriter, r *http.Request) {
@@ -561,6 +644,9 @@ func (s *Server) Handler() http.Handler {
 			frames = append(frames, proto.CmdStartMsg())
 		}
 		s.sendFnTo(port, frames...)
+		if s.SaveConfig != nil {
+			s.SaveConfig(func(c *config.Config) { c.Mode = m })
+		}
 		writeJSON(w, map[string]any{"ok": true, "mode": m})
 	})
 	mux.HandleFunc("/api/hop", func(w http.ResponseWriter, r *http.Request) {
@@ -570,6 +656,9 @@ func (s *Server) Handler() http.Handler {
 			mask = proto.AllChannelsMask() // hop across 11-26
 		}
 		s.cmd(proto.CmdSetHopMsg(mask, uint16(dwell)))
+		if s.SaveConfig != nil {
+			s.SaveConfig(func(c *config.Config) { c.HopDwellMs = dwell })
+		}
 		writeJSON(w, map[string]any{"hop_dwell_ms": dwell})
 	})
 	mux.HandleFunc("/api/reset_radio", func(w http.ResponseWriter, r *http.Request) {
@@ -656,6 +745,7 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache") // always serve the current embedded UI
 		w.Write(s.Web)
 	})
 	return mux

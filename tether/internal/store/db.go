@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS incidents(
  id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, addr TEXT, reason TEXT,
  rssi INT, lqi INT, channel INT, ed INT, silent_s INT, raw TEXT);
 CREATE TABLE IF NOT EXISTS route_failures(addr INTEGER PRIMARY KEY, count INT, last_reason TEXT, last_seen REAL);
+CREATE TABLE IF NOT EXISTS pans(pan INTEGER PRIMARY KEY, count INT, last_seen REAL, channel INT);
 CREATE TABLE IF NOT EXISTS probe_results(
  id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, target INT, port TEXT, radio INT,
  acked INT, rssi INT, lqi INT);
@@ -87,6 +88,14 @@ func (d *DB) IngestFrame(ts float64, radio, channel int, rssi, lqi int, dec *dec
 	d.db.Exec(`INSERT INTO packets(ts,radio,channel,rssi,lqi,src,dst,ftype,summary,decrypted)
 	           VALUES(?,?,?,?,?,?,?,?,?,?)`,
 		ts, radio, channel, rssi, lqi, srcN, dstN, dec.MAC.TypeName, dec.Summary(), decrypted)
+
+	// Track PAN ids seen on-air (to flag foreign Zigbee networks). Ignore the
+	// broadcast PAN 0xFFFF and "not present".
+	if pan := dec.MAC.DstPan; pan >= 0 && pan != 0xFFFF {
+		d.db.Exec(`INSERT INTO pans(pan,count,last_seen,channel) VALUES(?,1,?,?)
+		           ON CONFLICT(pan) DO UPDATE SET count=count+1,last_seen=?,channel=?`,
+			pan, ts, channel, ts, channel)
+	}
 
 	// MAC-layer addresses are the physical hop (often router<->coordinator).
 	if src >= 0 && src != broadcast {
@@ -233,8 +242,10 @@ func (d *DB) IngestRouteFailure(addr int, reason string, ts float64) {
 }
 
 // Diagnostics analyses the captured data and returns a list of health issues,
-// each {severity, category, message, addr?}.
-func (d *DB) Diagnostics() []map[string]any {
+// each {severity, category, message, addr?}. Severities are syslog levels:
+// critical > error > warning > notice > info. ourPan (0 = unknown) is the local
+// network's PAN id, used to flag foreign Zigbee networks.
+func (d *DB) Diagnostics(ourPan int) []map[string]any {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	var out []map[string]any
@@ -255,41 +266,87 @@ func (d *DB) Diagnostics() []map[string]any {
 			fn(rows)
 		}
 	}
-	// Route failures (the strongest dropout signal).
+	// Route failures (the strongest dropout signal) — a real error.
 	q(`SELECT addr,count,last_reason FROM route_failures WHERE count>=2 ORDER BY count DESC LIMIT 30`,
 		func(r *sql.Rows) {
 			var addr, c int
 			var reason string
 			r.Scan(&addr, &c, &reason)
-			add("high", "Route failure", fmt.Sprintf("%d× \"%s\" — device hard to reach (re-pair or add a router nearby)", c, reason), addr)
+			sev := "error"
+			if c >= 10 {
+				sev = "critical"
+			}
+			add(sev, "Route failure", fmt.Sprintf("%d× \"%s\" — device hard to reach (re-pair or add a router nearby)", c, reason), addr)
 		})
-	// Weak links.
+	// Foreign Zigbee networks — other PAN ids seen (notice). If our PAN is
+	// unknown (no ZHA backup), assume the busiest PAN is ours and flag the rest.
+	panRow := 0
+	q(`SELECT pan,count,channel FROM pans ORDER BY count DESC`, func(r *sql.Rows) {
+		var pan, c, ch int
+		r.Scan(&pan, &c, &ch)
+		defer func() { panRow++ }()
+		mine := (ourPan > 0 && pan == ourPan) || (ourPan == 0 && panRow == 0)
+		if mine || c < 3 {
+			return
+		}
+		add("notice", "Foreign network", fmt.Sprintf("PAN 0x%04x seen on ch %d (%d frames) — another Zigbee/Thread network sharing this channel; a possible interference source", uint16(pan), ch, c), -1)
+	})
+	// Weak links — INFO: this is only the sniffer's vantage, not the mesh link.
 	q(`SELECT src,dst,last_lqi FROM links WHERE last_lqi < 50 AND count>=2 ORDER BY last_lqi ASC LIMIT 30`,
 		func(r *sql.Rows) {
 			var src, dst, lqi int
 			r.Scan(&src, &dst, &lqi)
-			sev := "warn"
-			if lqi < 25 {
-				sev = "high"
-			}
-			add(sev, "Weak link ⌖", fmt.Sprintf("0x%04x→0x%04x weak AS HEARD BY THE SNIFFER (LQI %d) — may be fine on the mesh; compare the device's Net LQI", uint16(src), uint16(dst), lqi), src)
+			add("info", "Weak link", fmt.Sprintf("0x%04x→0x%04x LQI %d as heard by the SNIFFER — may be fine on the mesh; compare the device's Net LQI", uint16(src), uint16(dst), lqi), src)
 		})
-	// Weak devices — note this is the SNIFFER's vantage, not the network's.
+	// Far from sniffer — INFO (sniffer's distance, not the device's link).
 	q(`SELECT addr,last_rssi FROM devices WHERE last_rssi < -85 AND count>=2 ORDER BY last_rssi ASC LIMIT 30`,
 		func(r *sql.Rows) {
 			var addr, rssi int
 			r.Scan(&addr, &rssi)
-			add("info", "Far from sniffer ⌖", fmt.Sprintf("RSSI %d dBm at the SNIFFER — this is the sniffer's distance to the device, not the device's link to its router. Check Net LQI (HA) or run an active test from a nearer radio", rssi), addr)
+			add("info", "Far from sniffer", fmt.Sprintf("RSSI %d dBm at the SNIFFER — the sniffer's distance to the device, not its link to its router. Check Net LQI (HA) or probe from a nearer radio", rssi), addr)
 		})
-	// Channel noise (latest ED per channel).
+	// Channel noise (latest ED per channel) — warning.
 	q(`SELECT channel, ed_dbm FROM ed_samples WHERE rowid IN (SELECT MAX(rowid) FROM ed_samples GROUP BY channel)`,
 		func(r *sql.Rows) {
 			var ch, ed int
 			r.Scan(&ch, &ed)
 			if ed > -75 {
-				add("warn", "Channel noise", fmt.Sprintf("channel %d energy %d dBm — busy; consider a quieter Zigbee channel (15/20/25)", ch, ed), -1)
+				add("warning", "Channel noise", fmt.Sprintf("channel %d energy %d dBm — busy; consider a quieter Zigbee channel (15/20/25)", ch, ed), -1)
 			}
 		})
+	now := float64(time.Now().Unix())
+	// Silent devices — a device that was chatty then went quiet is the classic
+	// dropout signature. Conservative thresholds so sleepy sensors don't spam.
+	q(`SELECT addr,last_seen,count FROM devices WHERE count>=5 AND addr!=0 ORDER BY last_seen ASC LIMIT 40`,
+		func(r *sql.Rows) {
+			var addr, c int
+			var ls float64
+			r.Scan(&addr, &ls, &c)
+			age := now - ls
+			if age < 1800 {
+				return
+			}
+			sev := "notice"
+			if age > 7200 {
+				sev = "warning"
+			}
+			add(sev, "Silent device", fmt.Sprintf("not heard for %dm (was chatty: %d frames) — a candidate for the dropout you're chasing; power-cycle test or active-probe it", int(age/60), c), addr)
+		})
+	// Coordinator presence — no 0x0000 traffic usually means wrong channel or a
+	// stalled capture.
+	var coordSeen float64
+	d.db.QueryRow(`SELECT last_seen FROM devices WHERE addr=0`).Scan(&coordSeen)
+	if coordSeen == 0 {
+		add("warning", "Coordinator", "no coordinator (0x0000) traffic seen — are you on the right channel?", 0)
+	} else if now-coordSeen > 300 {
+		add("warning", "Coordinator", fmt.Sprintf("no coordinator traffic for %dm — capture may be stalled or off-channel", int((now-coordSeen)/60)), 0)
+	}
+	// Decryption hint — NWK payloads seen but nothing decrypted (no/incorrect key).
+	var pkts, dec int
+	d.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(decrypted),0) FROM packets`).Scan(&pkts, &dec)
+	if pkts > 200 && dec == 0 {
+		add("info", "Decryption", "no frames decrypted — set the network key in Config to decode payloads (addresses still work without it)", -1)
+	}
 	if len(out) == 0 {
 		add("info", "All clear", "no link/route/signal issues detected yet — keep capturing", -1)
 	}

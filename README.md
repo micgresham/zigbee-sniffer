@@ -110,14 +110,23 @@ See [docs/getting-started.md](docs/getting-started.md) for the full walkthrough.
 
 ## Documentation
 
-Everything is documented under [`docs/`](docs/). Start with
-[getting-started.md](docs/getting-started.md) and [architecture.md](docs/architecture.md).
+**New here? → [Quickstart](docs/quickstart.md) · [User Guide](docs/user-guide.md)** (with diagrams).
+Also available in **Word**: [quickstart.docx](docs/quickstart.docx) · [user-guide.docx](docs/user-guide.docx).
+
+![Architecture](docs/images/architecture.svg)
+
+Everything else is under [`docs/`](docs/): [architecture.md](docs/architecture.md),
+[deployment-addon.md](docs/deployment-addon.md) (run inside Home Assistant), [ota.md](docs/ota.md)
+(firmware updates), [hardware.md](docs/hardware.md), [troubleshooting.md](docs/troubleshooting.md),
+and the [protocol spec](protocol/framing.md).
 
 ## Safety & scope
 
-This is a **passive receiver / diagnostic tool** for *your own* network. Decryption requires
-*your own* Zigbee network key (see [docs/decoding-and-decryption.md](docs/decoding-and-decryption.md)).
-It does not transmit Zigbee traffic or join the network.
+A **diagnostic tool** for *your own* network. It's a passive receiver by default; decryption
+requires *your own* Zigbee network key (see
+[docs/decoding-and-decryption.md](docs/decoding-and-decryption.md)). The optional **Active testing**
+mode transmits a MAC probe (and awaits an ACK) to verify a device is alive — it never joins the
+network, and it's gated behind explicit user actions.
 
 ## License
 

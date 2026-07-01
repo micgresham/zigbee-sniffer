@@ -17,8 +17,9 @@ type Radio struct {
 	Frames   int64   `json:"frames"`
 	Probes   int64   `json:"probes"`
 	LastSeen float64 `json:"last_seen"`
-	Mode     int     `json:"mode"` // last reported mode (1=capture 2=ed 3=cap+ed 0=idle, -1=unknown)
-	Role     string  `json:"role"` // filled by the server from the role map
+	Mode     int     `json:"mode"`    // last reported mode (1=capture 2=ed 3=cap+ed 0=idle, -1=unknown)
+	Stopped  bool    `json:"stopped"` // user pressed Stop (mode stays 'capture' but RX is off)
+	Role     string  `json:"role"`    // filled by the server from the role map
 }
 
 // Tracker is a thread-safe port→radio map.
@@ -62,9 +63,24 @@ func (t *Tracker) Saw(port string, radioID, channel int, frame bool) bool {
 	}
 	if frame {
 		r.Frames++
+		r.Stopped = false // frames are arriving → capture is clearly live
 	}
 	r.LastSeen = float64(time.Now().UnixNano()) / 1e9
 	return newly
+}
+
+// SetStopped marks whether the user has stopped a port's capture. An empty port
+// applies to all radios (Stop broadcasts).
+func (t *Tracker) SetStopped(port string, stopped bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if port == "" {
+		for _, r := range t.m {
+			r.Stopped = stopped
+		}
+		return
+	}
+	t.get(port).Stopped = stopped
 }
 
 // PortsFor returns the open ports currently reporting the given radio-id.

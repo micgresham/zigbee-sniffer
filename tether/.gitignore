@@ -4,3 +4,5 @@ zbsniff.sqlite
 
 # saved config (contains HA token)
 zbsniff.yaml
+zbsniff.yaml.key
+*.yaml.key

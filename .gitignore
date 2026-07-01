@@ -56,3 +56,5 @@ hardware/**/gerbers/
 firmware/sdkconfig.standalone
 firmware/sdkconfig.usb-sniffer
 firmware/sdkconfig.satellite
+docs/tools/.venv/
+docs/tools/_figs/

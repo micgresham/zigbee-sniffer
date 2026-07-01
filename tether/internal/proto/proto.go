@@ -27,6 +27,7 @@ const (
 	MsgAck           = 0x05
 	MsgIncident      = 0x06
 	MsgProbeResult   = 0x07
+	MsgOtaStatus     = 0x08
 
 	CmdSetChannel = 0x81
 	CmdSetMode    = 0x82
@@ -38,6 +39,20 @@ const (
 	CmdGetStatus  = 0x88
 	CmdSetRadioID = 0x89
 	CmdProbe      = 0x8A
+	CmdOtaBegin   = 0x8B
+	CmdOtaData    = 0x8C
+	CmdOtaEnd     = 0x8D
+	CmdOtaAbort   = 0x8E
+)
+
+// OTA states (MsgOtaStatus.State).
+const (
+	OtaIdle = iota
+	OtaReceiving
+	OtaWriting
+	OtaVerifying
+	OtaOK
+	OtaError
 )
 
 // Capture modes
@@ -123,6 +138,24 @@ func CmdSetHopMsg(hopMask uint32, dwellMs uint16) []byte {
 // CmdSetRadioIDMsg provisions a dongle's radio-id (persisted to its NVS).
 func CmdSetRadioIDMsg(id byte) []byte { return Encode(CmdSetRadioID, []byte{id}) }
 
+// OTA command builders. target 0 = the tethered C6, 1..3 = a satellite.
+func CmdOtaBeginMsg(target byte, total, crc32 uint32) []byte {
+	p := make([]byte, 9)
+	p[0] = target
+	binary.LittleEndian.PutUint32(p[1:], total)
+	binary.LittleEndian.PutUint32(p[5:], crc32)
+	return Encode(CmdOtaBegin, p)
+}
+func CmdOtaDataMsg(target byte, offset uint32, chunk []byte) []byte {
+	p := make([]byte, 5+len(chunk))
+	p[0] = target
+	binary.LittleEndian.PutUint32(p[1:], offset)
+	copy(p[5:], chunk)
+	return Encode(CmdOtaData, p)
+}
+func CmdOtaEndMsg(target byte) []byte   { return Encode(CmdOtaEnd, []byte{target}) }
+func CmdOtaAbortMsg(target byte) []byte { return Encode(CmdOtaAbort, []byte{target}) }
+
 // CmdProbeMsg requests an active MAC probe of target (short addr) on pan.
 func CmdProbeMsg(target, pan uint16) []byte {
 	p := make([]byte, 4)
@@ -181,6 +214,15 @@ type ProbeResult struct {
 	Acked   bool
 	RSSI    int8
 	LQI     byte
+}
+
+// OtaStatus is an OTA progress report.
+type OtaStatus struct {
+	Target   byte
+	State    byte
+	Received uint32
+	Total    uint32
+	Err      byte
 }
 
 // ParsePayload decodes a payload by message type. Returns nil for unknown types.
@@ -242,6 +284,17 @@ func ParsePayload(msgType byte, p []byte) any {
 			Acked:   p[3] != 0,
 			RSSI:    int8(p[4]),
 			LQI:     p[5],
+		}
+	case MsgOtaStatus:
+		if len(p) < 11 {
+			return nil
+		}
+		return &OtaStatus{
+			Target:   p[0],
+			State:    p[1],
+			Received: binary.LittleEndian.Uint32(p[2:6]),
+			Total:    binary.LittleEndian.Uint32(p[6:10]),
+			Err:      p[10],
 		}
 	}
 	return nil

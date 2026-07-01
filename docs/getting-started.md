@@ -1,7 +1,8 @@
 # Getting started
 
-> **Current status: Block A** — the USB true-sniffer path works end-to-end (firmware → host →
-> Wireshark). The standalone web UI and full host app land in Blocks B–C.
+> 📘 **Looking for the current, user-friendly guide?** See the **[Quickstart](quickstart.md)** and
+> the **[User Guide](user-guide.md)** (with diagrams) — they cover the finished Go host + web UI.
+> This page is the original developer walkthrough, kept for reference.
 
 ## Prerequisites
 
