@@ -1,23 +1,22 @@
 # API (REST + WebSocket)
 
-> Status: design. Implemented in Block C (host app) and mirrored by a lighter WS API on the
-> standalone device (Block B). Documented here so the frontend and integrations can be built
-> against a stable contract.
-
-The host app (FastAPI) serves the React UI and exposes:
+> Status: implemented in the tethered Go host ([`tether/internal/api`](../tether/internal/api)),
+> which serves the embedded web UI. A lighter WS API on the standalone device mirrors the live
+> feed. See [host.md](host.md).
 
 ## WebSocket `/ws`
 
-Push channel for live data (newline-delimited JSON / binary framing per
-[protocol/framing.md](../protocol/framing.md)). Message kinds:
-- `frame` — decoded captured frame (addresses, type, RSSI/LQI, decoded summary).
+Push channel for live data (JSON events). Message kinds (`kind` field):
+- `frame` — decoded captured frame (channel, RSSI/LQI, type, decoded summary, decrypted).
 - `ed` — energy-detect sample (channel, dBm, sweep id).
-- `status` — per-radio status/counters.
-- `incident` — a newly detected incident.
-- `device` / `link` — device-registry and link-quality updates.
+- `status` — per-radio status/counters (mode, channel, captured, uptime, fw…).
+- `incident` — a newly detected incident (silence / recovered) with channel + ED.
+- `survey` — whole-band survey progress (`channel`, `active`, `done`).
+- `probe` — active-test probe result (target, acked, RSSI/LQI).
+- `ota` — firmware-update progress (target, state, received/total).
 
-Client → server: `set_channel`, `set_mode`, `set_hop`, `ed_scan`, `set_key`, `start`, `stop`
-(mapped to the device commands).
+Commands go over REST (below), not the socket. The standalone device's WS additionally accepts
+binary command frames (`set_channel`, `set_mode`, `ed_scan`, `set_key`).
 
 ## REST (read/query history)
 
@@ -36,8 +35,11 @@ Client → server: `set_channel`, `set_mode`, `set_hop`, `ed_scan`, `set_key`, `
 | GET/PUT | `/api/config` | settings (channels, key, hop, HA integration, thresholds) |
 | GET | `/api/radios` | connected radios + roles |
 
-The exact schemas are defined with Pydantic models in `host/zbsniff/api/` and published as
-OpenAPI at `/docs` when the host app runs.
+Endpoints are registered in [`tether/internal/api/server.go`](../tether/internal/api/server.go);
+the JSON responses are plain maps (no formal schema). Additional live endpoints exist there
+(`/api/prefs`, `/api/mode`, `/api/hop`, `/api/set_channel`, `/api/key`, `/api/reconnect`,
+`/api/reset_radio`, `/api/allocate`, `/api/scan`, OTA, active-testing) — read the file for the
+full list.
 
 ## On-device (standalone build) — implemented
 

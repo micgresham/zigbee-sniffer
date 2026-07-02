@@ -23,9 +23,13 @@ The firmware ships as **three PlatformIO build profiles** sharing one capture co
 | **`tethered`** | any ESP32-C6 | Lean, WiFi off, high-fidelity. Framed serial → Wireshark **and** the Python host app. The "true sniffer." |
 | **`satellite`** | ESP32-C6 SuperMini | Dumb capture-and-forward over SPI to a primary (carrier board, standalone multi-radio). |
 
-A **Python / FastAPI host app** (packaged as a **Home Assistant Add-on**) provides the
-heavyweight experience: unlimited history in SQLite, full decode + optional decryption, rich
-React UI, Z2M/ZHA correlation, and Wireshark/pcap export.
+A **single-binary Go host** ([`tether/`](tether/)) plugs a USB C6 dongle into your PC/HA box and
+serves the whole diagnostic web UI (embedded, no runtime deps): live decode + optional decryption,
+SQLite history, routing tree, RF spectrum, neighbouring-network discovery, **automatic
+silence/recovery incident logging**, ZHA name/LQI correlation, and CSV/JSON export. (A legacy
+**Python / FastAPI** host under [`host/`](host/) still provides the pcap/CLI tools and the HA
+add-on payload.) The host self-heals the serial link and encrypts secrets (network key, HA token)
+at rest.
 
 See [docs/architecture.md](docs/architecture.md) for the full picture.
 
