@@ -498,10 +498,6 @@ async function loadIncidents(){const i=await j("/api/incidents");if(!i)return;
 async function loadIncidentCfg(){const c=await j("/api/incident_config");if(!c)return;
   const el=document.getElementById("cfg-silence");
   if(el&&document.activeElement!==el)el.value=c.silence_s;}
-on("cfg-silence-save",async()=>{const v=+document.getElementById("cfg-silence").value||120;
-  await post("/api/incident_config?silence="+v);
-  const s=document.getElementById("cfg-silence-stat");s.textContent="saved ✓ (applies within 20s)";
-  setTimeout(()=>{s.textContent="";},2500);});
 let peakByCh={};
 const edValid=v=>v!=null&&v>-120;               // -128/-127 = no-data/err sentinels
 const edHeight=v=>edValid(v)?Math.max(2,Math.min(100,(v+100)*1.6)):3;
@@ -869,6 +865,10 @@ async function startSurvey(active){if(!await gateFn("spectrum"))return;
 on("nw-survey",()=>startSurvey(false));
 on("nw-active",()=>startSurvey(true));
 on("c-savekey",()=>post("/api/save_key"));
+on("cfg-silence-save",async()=>{const v=+document.getElementById("cfg-silence").value||120;
+  await post("/api/incident_config?silence="+v);
+  const s=document.getElementById("cfg-silence-stat");s.textContent="saved ✓ (applies within 20s)";
+  setTimeout(()=>{s.textContent="";},2500);});
 document.querySelectorAll("[data-exp]").forEach(b=>b.onclick=()=>{
   const fmt=document.getElementById("exp-fmt").value;
   window.open(`/api/export?what=${b.dataset.exp}&format=${fmt}`,"_blank");});
