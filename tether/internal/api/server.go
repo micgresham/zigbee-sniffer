@@ -36,6 +36,22 @@ func panOf(rt *runtime.Runtime) int {
 	return int(rt.Pan())
 }
 
+// statusChannel reads the device's current channel from the latest status.
+func statusChannel(rt *runtime.Runtime) int {
+	if rt == nil {
+		return 0
+	}
+	switch n := rt.Status()["channel"].(type) {
+	case int:
+		return n
+	case uint8:
+		return int(n)
+	case float64:
+		return int(n)
+	}
+	return 0
+}
+
 // panHex renders the runtime PAN id as "0x1234" (or "" if unknown).
 func panHex(rt *runtime.Runtime) string {
 	if rt == nil || rt.Pan() == 0 {
@@ -265,6 +281,40 @@ func (s *Server) sendFnTo(port string, frames ...[]byte) {
 		return
 	}
 	s.cmd(frames...)
+}
+
+// runSurvey hops every Zigbee channel, capturing briefly on each so foreign
+// networks on other channels get recorded in the pans table. When active is set
+// it also transmits a beacon request per channel, soliciting replies from even
+// idle networks. It publishes per-channel progress on the WebSocket, then
+// restores the original channel.
+func (s *Server) runSurvey(port string, dwellMs int, active bool) {
+	orig := statusChannel(s.RT)
+	for ch := int(proto.ChannelMin); ch <= int(proto.ChannelMax); ch++ {
+		s.sendFnTo(port,
+			proto.CmdSetChannelMsg(byte(ch)),
+			proto.CmdSetModeMsg(proto.ModeCapture),
+			proto.CmdStartMsg())
+		s.Hub.Publish(map[string]any{"kind": "survey", "channel": ch, "active": active, "done": false})
+		if active {
+			// Let the radio settle on the new channel, then solicit beacons.
+			// Send twice — a single request can be lost on a busy channel.
+			time.Sleep(150 * time.Millisecond)
+			s.sendFnTo(port, proto.CmdBeaconReqMsg())
+			time.Sleep(200 * time.Millisecond)
+			s.sendFnTo(port, proto.CmdBeaconReqMsg())
+			time.Sleep(time.Duration(dwellMs) * time.Millisecond)
+		} else {
+			time.Sleep(time.Duration(dwellMs) * time.Millisecond)
+		}
+	}
+	if orig >= int(proto.ChannelMin) && orig <= int(proto.ChannelMax) {
+		s.sendFnTo(port,
+			proto.CmdSetChannelMsg(byte(orig)),
+			proto.CmdSetModeMsg(proto.ModeCapture),
+			proto.CmdStartMsg())
+	}
+	s.Hub.Publish(map[string]any{"kind": "survey", "channel": orig, "active": active, "done": true})
 }
 
 // cmd sends one or more framed command messages to the device(s).
@@ -569,6 +619,26 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("/api/spectrum", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, nz(s.DB.Spectrum()))
+	})
+	// Zigbee networks (PAN ids) seen on-air, and which one is ours.
+	mux.HandleFunc("/api/networks", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"networks": nz(s.DB.Networks()), "ours": panHex(s.RT)})
+	})
+	// Full-band survey: hop every channel briefly to discover networks on all of
+	// them (single radio → pauses capture). Progress goes out on the WebSocket.
+	mux.HandleFunc("/api/survey", func(w http.ResponseWriter, r *http.Request) {
+		port, _, ok, _, reason := s.allocate("spectrum")
+		if !ok {
+			writeJSON(w, map[string]any{"ok": false, "reason": reason})
+			return
+		}
+		dwell := 1500
+		if d, err := strconv.Atoi(r.URL.Query().Get("dwell")); err == nil && d >= 300 {
+			dwell = d
+		}
+		active := r.URL.Query().Get("active") == "1"
+		go s.runSurvey(port, dwell, active)
+		writeJSON(w, map[string]any{"ok": true})
 	})
 	mux.HandleFunc("/api/set_channel", func(w http.ResponseWriter, r *http.Request) {
 		ch, _ := strconv.Atoi(r.URL.Query().Get("ch"))

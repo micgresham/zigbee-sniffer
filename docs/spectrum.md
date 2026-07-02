@@ -33,3 +33,10 @@ radio A to the HA channel for continuous capture while radio B sweeps. See
 - ED is approximate and board-dependent; treat it as **relative**, not calibrated dBm.
 - A channel that is quiet at the sniffer's location may be noisy at a device's location — survey
   near the problem device, or use a satellite placed there.
+
+## Energy is not the whole story — see the networks too
+
+ED tells you a channel is *busy*, not *who* is on it. The **Zigbee networks** panel on the same
+tab identifies the actual networks (by PAN id) sharing the band, and a survey/active scan finds
+those on other channels. A raised noise floor **plus** a foreign PAN on your channel is a strong
+interference signal. See [networks.md](networks.md).

@@ -3,8 +3,9 @@
 A full-featured IEEE 802.15.4 / Zigbee diagnostic tool built on the **ESP32-C6**. Unlike the
 existing ESP32 sniffers that only stream frames to Wireshark, this project adds device
 discovery, per-device message history, an LQI/RSSI **routing tree**, **incident logging** for
-"device went unresponsive" problems, and **RF spectrum / interference analysis** using the
-radio's Energy-Detect (ED) scan.
+"device went unresponsive" problems, **RF spectrum / interference analysis** using the
+radio's Energy-Detect (ED) scan, and **neighbouring-network discovery** (passive survey +
+active beacon-request scan across channels 11–26).
 
 > **Why this exists:** to diagnose intermittent Zigbee dropouts on a Home Assistant network —
 > capturing what is *actually happening on-air* when a device drops, and correlating it with
@@ -116,6 +117,7 @@ Also available in **Word**: [quickstart.docx](docs/quickstart.docx) · [user-gui
 ![Architecture](docs/images/architecture.svg)
 
 Everything else is under [`docs/`](docs/): [architecture.md](docs/architecture.md),
+[networks.md](docs/networks.md) (seeing other Zigbee networks), [spectrum.md](docs/spectrum.md),
 [deployment-addon.md](docs/deployment-addon.md) (run inside Home Assistant), [ota.md](docs/ota.md)
 (firmware updates), [hardware.md](docs/hardware.md), [troubleshooting.md](docs/troubleshooting.md),
 and the [protocol spec](protocol/framing.md).

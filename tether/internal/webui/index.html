@@ -301,6 +301,22 @@ border-left:1px solid var(--line);transform:translateX(100%);transition:.2s;z-in
     <canvas id="waterfall" width="640" height="150"></canvas>
   </div>
 
+  <div class="panel wide" data-tab="spectrum">
+    <h2>Zigbee networks <span class="cnt" id="nw-cnt">0</span>
+      <span class="dim" style="font-weight:400;text-transform:none;font-size:11px">every PAN heard on-air — yours and the neighbours'</span>
+      <span style="float:right">
+        <button id="nw-survey" title="Hop every channel and listen for existing traffic (passive)">Passive survey</button>
+        <button id="nw-active" title="Hop every channel and transmit a beacon request so even idle networks announce themselves">Active scan ⚡</button>
+      </span></h2>
+    <div class="dim" style="font-size:11px;margin-bottom:8px">
+      Your capture shows networks on <b>your channel</b> only. A survey hops every channel (11–26) to find networks elsewhere — on a single radio this briefly pauses capture (~30 s).
+      <b>Passive</b> just listens; <b>Active</b> also sends a beacon request per channel so even idle networks reply (needs firmware ≥ 0.26).
+      <span id="nw-prog" class="weak" style="margin-left:8px"></span>
+    </div>
+    <div class="scroll"><table><thead><tr><th>PAN</th><th>Channel</th><th>Frames</th><th>Last seen</th><th></th></tr></thead>
+    <tbody id="nw-tbl"></tbody></table></div>
+  </div>
+
   <div class="panel">
     <h2>Incidents <span class="cnt" id="i-cnt">0</span></h2>
     <div class="scroll"><table><thead><tr><th>When</th><th>Device</th><th>Reason</th><th>Ch</th><th>Silent</th></tr></thead>
@@ -397,7 +413,10 @@ function ws(){const p=location.protocol==="https:"?"wss:":"ws:";
     if(m.kind==="status")status=m;
     else if(m.kind==="frame"){if(!paused){frames.unshift(m);if(frames.length>200)frames.pop();}}
     else if(m.kind==="incident")loadIncidents();
-    else if(m.kind==="ota")otaProgress(m);};}
+    else if(m.kind==="ota")otaProgress(m);
+    else if(m.kind==="survey"){const p=document.getElementById("nw-prog"),k=m.active?"active scan":"survey";
+      if(m.done){p.textContent=k+" complete — restored channel "+(m.channel||"");loadNetworks();}
+      else{p.textContent=(m.active?"beaconing":"listening on")+" channel "+m.channel+"…";loadNetworks();}};}}
 const otaStates=["idle","receiving","writing","verifying","complete — rebooting","error"];
 function otaProgress(m){const box=document.getElementById("ota-prog");if(!box)return;box.style.display="block";
   const pct=m.total?Math.round(m.received/m.total*100):0,bar=document.getElementById("ota-bar");
@@ -797,6 +816,24 @@ on("sp-cont",async()=>{if(!spCont&&!await gateFn("spectrum"))return;spCont=!spCo
   b.classList.toggle("on",spCont);b.textContent=spCont?"Stop continuous":"Continuous";
   post("/api/mode?m="+(spCont?2:1));});
 on("sp-peakclear",()=>{peakByCh={};loadSpectrum();});
+async function loadNetworks(){const r=await j("/api/networks");if(!r)return;
+  const nw=r.networks||[],ours=(r.ours||"").toLowerCase();
+  document.getElementById("nw-cnt").textContent=nw.length;
+  document.getElementById("nw-tbl").innerHTML=nw.map(n=>{
+    const mine=n.pan.toLowerCase()===ours;
+    return `<tr><td class=mono>${n.pan}${mine?' <span class="tag coord">yours</span>':' <span class="tag">foreign</span>'}</td>`+
+      `<td>${n.channel||"–"}</td><td>${n.count}</td>`+
+      `<td class=dim>${n.last_seen?ageStr(n.last_seen):""}</td>`+
+      `<td class=dim>${mine?"":"neighbouring network"}</td></tr>`;
+  }).join("")||'<tr><td colspan=5 class=dim>no networks seen yet — capture, or run a survey</td></tr>';}
+async function startSurvey(active){if(!await gateFn("spectrum"))return;
+  const what=active?"Active scan transmits a beacon request on each of the 16 Zigbee channels (~30 s) so even idle networks reply. It TX's on-air (a standard scan) and needs firmware ≥ 0.26."
+                   :"Passive survey hops all 16 Zigbee channels (~30 s) listening for networks on other channels.";
+  if(!confirm(what+" On a single radio this pauses your capture. Continue?"))return;
+  document.getElementById("nw-prog").textContent="starting "+(active?"active scan":"survey")+"…";
+  post("/api/survey"+(active?"?active=1":""));}
+on("nw-survey",()=>startSurvey(false));
+on("nw-active",()=>startSurvey(true));
 on("c-savekey",()=>post("/api/save_key"));
 document.querySelectorAll("[data-exp]").forEach(b=>b.onclick=()=>{
   const fmt=document.getElementById("exp-fmt").value;
@@ -915,7 +952,7 @@ function showTab(t){
   document.querySelectorAll(".tabbtn").forEach(b=>b.classList.toggle("on",b.dataset.t===t));
   document.querySelectorAll(".grid > .panel").forEach(p=>{const tab=p.dataset.tab;
     p.style.display=tab?(tab===t?"":"none"):(t==="overview"?"":"none");});
-  if(t==="spectrum")loadSpectrum();
+  if(t==="spectrum"){loadSpectrum();loadNetworks();}
   if(t==="active")loadActive();
   if(t==="config")loadRadios();
   if(t==="frames")loadFrames();
@@ -974,7 +1011,7 @@ on("ota-go",async()=>{const f=document.getElementById("ota-file").files[0];
   else if(r)document.getElementById("ota-stat").textContent=`sent ${r.size} bytes (crc ${r.crc}) — flashing…`;});
 
 ws();bindGraphZoom();loadActive();loadFrames();initPrefs();
-setInterval(()=>{loadDevices();loadRouting();loadIncidents();loadSpectrum();loadDiagnostics();loadHAStatus();loadConn();loadActive();loadRadios();if(selected)showDetail(selected);},3000);
+setInterval(()=>{loadDevices();loadRouting();loadIncidents();loadSpectrum();loadNetworks();loadDiagnostics();loadHAStatus();loadConn();loadActive();loadRadios();if(selected)showDetail(selected);},3000);
 setInterval(loadConn,1000);
 setInterval(render,500);
 loadDevices();loadRouting();loadIncidents();loadSpectrum();loadDiagnostics();loadHAStatus();loadConn();

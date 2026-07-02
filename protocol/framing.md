@@ -122,6 +122,7 @@ Firmware-update progress (see `CMD_OTA_*` and [docs/ota.md](../docs/ota.md)). Pa
 | `0x8C` | `CMD_OTA_DATA`    | `target(1)` `offset(4, LE)` `chunk(n)` — a firmware chunk (≤512 B) |
 | `0x8D` | `CMD_OTA_END`     | `target(1)` — finish, verify, set boot slot, reboot |
 | `0x8E` | `CMD_OTA_ABORT`   | `target(1)` — cancel an in-progress update |
+| `0x8F` | `CMD_BEACON_REQ`  | — TX an 802.15.4 beacon request on the current channel (active network scan). Beacon replies arrive as ordinary `CAPTURED_FRAME`s. Requires firmware ≥ 0.26. |
 
 ---
 

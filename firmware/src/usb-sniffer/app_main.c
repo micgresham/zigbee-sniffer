@@ -20,6 +20,7 @@
 #include "radio_capture.h"
 #include "ed_scan.h"
 #include "probe.h"
+#include "beacon.h"
 #include "ota.h"
 #include "standalone/spi_master.h"
 #include "transport_usb.h"
@@ -200,6 +201,10 @@ static void handle_command(uint8_t type, const uint8_t *p, uint16_t len)
             uint16_t pan    = (uint16_t)p[2] | (p[3] << 8);
             probe_send(target, pan);
         }
+        send_ack(type, 0);
+        break;
+    case CMD_BEACON_REQ:
+        beacon_request_send();
         send_ack(type, 0);
         break;
     case CMD_OTA_BEGIN:

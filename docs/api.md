@@ -27,6 +27,8 @@ Client → server: `set_channel`, `set_mode`, `set_hop`, `ed_scan`, `set_key`, `
 | GET | `/api/devices/{addr}/messages` | recent decoded messages for a device |
 | GET | `/api/routing` | nodes + edges for the routing tree (LQI-colored) |
 | GET | `/api/spectrum?from=&to=` | ED time-series for the waterfall + channel advice |
+| GET | `/api/networks` | every PAN id seen on-air (`networks[]`: `pan`, `channel`, `count`, `last_seen`) plus `ours` (your PAN) — see [networks.md](networks.md) |
+| POST | `/api/survey?active=&dwell=` | run a whole-band survey: hop channels 11–26 collecting PANs. `active=1` also TX's a beacon request per channel (needs firmware ≥ 0.26); `dwell` = ms/channel. Progress streams on `/ws` as `{"kind":"survey",...}` |
 | GET | `/api/incidents` | incident list (filterable) |
 | GET | `/api/incidents/{id}` | incident detail + context + pcap slice link |
 | GET | `/api/export/pcap?from=&to=` | pcap (LINKTYPE_IEEE802_15_4_TAP) of a time range |

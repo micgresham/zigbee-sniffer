@@ -119,6 +119,21 @@ Use it to find a quieter Zigbee channel and to spot Wi-Fi/interference.
 > On a single radio, a spectrum sweep **pauses capture** — the app asks before doing so, or blocks
 > it if a radio is dedicated to sniffing. Add a second radio with the **spectrum** role to run both.
 
+### Zigbee networks panel
+
+Below the waterfall, the **Zigbee networks** panel lists every network (PAN id) the sniffer has
+heard — tagged **yours** or **foreign** — with its channel, frame count, and last-seen. A foreign
+network **on your channel** is a prime dropout suspect.
+
+Because one radio hears only one channel, use a survey to see the rest of the band:
+- **Passive survey** — hops channels 11–26 listening for networks that are actively transmitting.
+- **Active scan ⚡** — also transmits a *beacon request* on each channel so even **idle** networks
+  reply. Needs firmware ≥ 0.26; it TX's on-air (a standard Zigbee scan), so it's gated behind a
+  confirmation, like the active device probe.
+
+A survey briefly **pauses capture** (~30 s) on a single radio, then restores your channel. Full
+detail: [networks.md](networks.md).
+
 ---
 
 ## Active testing tab

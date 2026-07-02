@@ -90,11 +90,17 @@ func (d *DB) IngestFrame(ts float64, radio, channel int, rssi, lqi int, dec *dec
 		ts, radio, channel, rssi, lqi, srcN, dstN, dec.MAC.TypeName, dec.Summary(), decrypted)
 
 	// Track PAN ids seen on-air (to flag foreign Zigbee networks). Ignore the
-	// broadcast PAN 0xFFFF and "not present".
-	if pan := dec.MAC.DstPan; pan >= 0 && pan != 0xFFFF {
+	// broadcast PAN 0xFFFF and "not present". Beacons (an active scan's replies)
+	// carry the responding network's PAN as the *source* PAN, not the dest, so
+	// record whichever is present.
+	seenPan := dec.MAC.DstPan
+	if seenPan < 0 || seenPan == 0xFFFF {
+		seenPan = dec.MAC.SrcPan
+	}
+	if seenPan >= 0 && seenPan != 0xFFFF {
 		d.db.Exec(`INSERT INTO pans(pan,count,last_seen,channel) VALUES(?,1,?,?)
 		           ON CONFLICT(pan) DO UPDATE SET count=count+1,last_seen=?,channel=?`,
-			pan, ts, channel, ts, channel)
+			seenPan, ts, channel, ts, channel)
 	}
 
 	// MAC-layer addresses are the physical hop (often router<->coordinator).
@@ -349,6 +355,27 @@ func (d *DB) Diagnostics(ourPan int) []map[string]any {
 	}
 	if len(out) == 0 {
 		add("info", "All clear", "no link/route/signal issues detected yet — keep capturing", -1)
+	}
+	return out
+}
+
+// Networks returns every PAN id seen on-air (yours + foreign), busiest first.
+func (d *DB) Networks() []map[string]any {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	rows, _ := d.db.Query(`SELECT pan,count,channel,last_seen FROM pans ORDER BY count DESC`)
+	var out []map[string]any
+	if rows != nil {
+		defer rows.Close()
+		for rows.Next() {
+			var pan, count, ch sql.NullInt64
+			var ls sql.NullFloat64
+			rows.Scan(&pan, &count, &ch, &ls)
+			out = append(out, map[string]any{
+				"pan": fmt.Sprintf("0x%04x", uint16(pan.Int64)),
+				"count": count.Int64, "channel": ch.Int64, "last_seen": ls.Float64,
+			})
+		}
 	}
 	return out
 }

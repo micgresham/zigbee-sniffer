@@ -36,13 +36,19 @@ Swap `-e` for `standalone` or `satellite`.
   semaphore) and sweeps a channel mask — the RF spectrum primitive. See [spectrum.md](spectrum.md).
 - **`codec.c`** implements the [wire framing](../protocol/framing.md): `zb_encode*()` and an
   incremental `zb_decoder_t`. CRC-16/CCITT-FALSE. Pure C, mirrored by `host/zbsniff/proto.py`.
+- **`probe.c`** (`CMD_PROBE`) TX's a MAC data frame to a target's short address with the
+  ACK-request bit set — an active device liveness test. See [user-guide.md](user-guide.md).
+- **`beacon.c`** (`CMD_BEACON_REQ`, firmware ≥ 0.26) TX's an 802.15.4 beacon request so
+  neighbouring coordinators/routers reply with a beacon revealing their PAN — the active
+  network-discovery scan. See [networks.md](networks.md).
 - **`config_nvs.c`** persists channel/mode/hop/network-key/Wi-Fi settings in NVS.
 
 ## usb-sniffer build (Block A)
 
 `app_main.c` runs a capture loop (encode `CAPTURED_FRAME` → USB) plus a command task that parses
 host commands (`CMD_SET_CHANNEL`, `CMD_SET_MODE`, `CMD_START/STOP`, `CMD_SET_HOP`, `CMD_ED_SCAN`,
-`CMD_SET_KEY`, `CMD_GET_STATUS`). A ~1 Hz `STATUS` heartbeat reports counters.
+`CMD_SET_KEY`, `CMD_GET_STATUS`, `CMD_PROBE`, `CMD_BEACON_REQ`, `CMD_OTA_*`). A ~1 Hz `STATUS`
+heartbeat reports counters.
 
 ### Console vs. binary stream
 The binary protocol uses the USB Serial/JTAG peripheral. To avoid `ESP_LOG` output corrupting it,

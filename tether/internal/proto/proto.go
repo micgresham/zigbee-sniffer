@@ -43,6 +43,7 @@ const (
 	CmdOtaData    = 0x8C
 	CmdOtaEnd     = 0x8D
 	CmdOtaAbort   = 0x8E
+	CmdBeaconReq  = 0x8F
 )
 
 // OTA states (MsgOtaStatus.State).
@@ -155,6 +156,10 @@ func CmdOtaDataMsg(target byte, offset uint32, chunk []byte) []byte {
 }
 func CmdOtaEndMsg(target byte) []byte   { return Encode(CmdOtaEnd, []byte{target}) }
 func CmdOtaAbortMsg(target byte) []byte { return Encode(CmdOtaAbort, []byte{target}) }
+
+// CmdBeaconReqMsg asks the radio to transmit an 802.15.4 beacon request on the
+// current channel; coordinators/routers reply with a beacon revealing their PAN.
+func CmdBeaconReqMsg() []byte { return Encode(CmdBeaconReq, nil) }
 
 // CmdProbeMsg requests an active MAC probe of target (short addr) on pan.
 func CmdProbeMsg(target, pan uint16) []byte {

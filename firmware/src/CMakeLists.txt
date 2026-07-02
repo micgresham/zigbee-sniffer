@@ -9,6 +9,7 @@ idf_component_register(
         "core/radio_capture.c"
         "core/ed_scan.c"
         "core/probe.c"
+        "core/beacon.c"
         "core/ota.c"
         "core/config_nvs.c"
         "usb-sniffer/app_main.c"
