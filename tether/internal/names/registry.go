@@ -24,13 +24,48 @@ type NetSig struct {
 // Registry maps 16-bit short addresses to a display name (IEEE or friendly name)
 // and the network-reported link quality (distinct from the sniffer's own view).
 type Registry struct {
-	mu  sync.RWMutex
-	m   map[uint16]string
-	net map[uint16]NetSig
+	mu    sync.RWMutex
+	m     map[uint16]string
+	net   map[uint16]NetSig
+	byExt map[uint64]string // extended (IEEE) address -> name (e.g. from a Hue bridge)
 }
 
 // New returns an empty registry.
-func New() *Registry { return &Registry{m: map[uint16]string{}, net: map[uint16]NetSig{}} }
+func New() *Registry {
+	return &Registry{m: map[uint16]string{}, net: map[uint16]NetSig{}, byExt: map[uint64]string{}}
+}
+
+// SetExt records a name for an extended (IEEE) address. Extended addresses are
+// globally unique, so this is unambiguous across networks (unlike short
+// addresses). Used by integrations that know a device by its MAC (e.g. Hue).
+func (r *Registry) SetExt(ext uint64, name string) {
+	if name == "" || ext == 0 {
+		return
+	}
+	r.mu.Lock()
+	r.byExt[ext] = name
+	r.mu.Unlock()
+}
+
+// NameExt returns the friendly name for an extended address, or "".
+func (r *Registry) NameExt(ext uint64) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.byExt[ext]
+}
+
+// Vendor returns the manufacturer label for an extended address from its OUI
+// (top 3 bytes), or "".
+func (r *Registry) Vendor(ext uint64) string { return vendorForExt(ext) }
+
+// LabelExt returns the best label for an extended address: a known friendly
+// name (integration) if present, else the manufacturer (OUI), else "".
+func (r *Registry) LabelExt(ext uint64) string {
+	if n := r.NameExt(ext); n != "" {
+		return n
+	}
+	return vendorForExt(ext)
+}
 
 // Set records a name for a short address (later/friendlier sources overwrite).
 func (r *Registry) Set(short uint16, name string) {

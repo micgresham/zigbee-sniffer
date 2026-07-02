@@ -21,6 +21,19 @@ each PAN it sees in the `pans` table (`store/db.go`) — for normal traffic that
 | Channel | the channel it was heard on. |
 | Frames | how many frames from that network the sniffer has decoded. |
 | Last seen | age of the most recent frame. |
+| Identity | the network's manufacturer or device name — see below. |
+
+## Naming the networks (Identity)
+
+Foreign PANs start as bare hex ids, but the host puts a name to them:
+
+- **By manufacturer (OUI), no setup.** Every extended (IEEE) address begins with a 24-bit OUI that
+  identifies the vendor. When the sniffer hears an extended address on a PAN, it labels that network
+  — **Philips Hue** (`00:17:88`), **Aqara/Xiaomi**, **IKEA/Silicon Labs**, **Texas Instruments**, … —
+  automatically. Table: [`tether/internal/names/oui.go`](../tether/internal/names/oui.go).
+- **By integration.** Pairing a **Philips Hue bridge** (Config → Philips Hue bridge) adds real
+  *device* names on top, and confirms the Hue network's channel. See
+  [ha-integration.md](ha-integration.md). Home Assistant/ZHA names your own network the same way.
 
 A **foreign PAN on your channel** is the one to worry about — it's another network
 contending for the same airtime. Foreign PANs are also raised in

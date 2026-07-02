@@ -99,8 +99,8 @@ select{background:var(--field);color:var(--fg);border:1px solid var(--line);bord
 #c-decstat.on{background:#0f2e1a;color:var(--good)}
 .devstatus{margin-top:14px;padding-top:12px;border-top:1px solid var(--line);display:flex;gap:22px;flex-wrap:wrap;font-size:12px;color:var(--dim)}
 .devstatus b{color:var(--fg);font-variant-numeric:tabular-nums}
-#ha-stat.on,#ha-stat.ok{background:#0f2e1a;color:var(--good)}
-#ha-stat.err{background:#3a1414;color:var(--weak)}
+#ha-stat.on,#ha-stat.ok,#hue-stat.ok{background:#0f2e1a;color:var(--good)}
+#ha-stat.err,#hue-stat.err{background:#3a1414;color:var(--weak)}
 .diags{display:flex;flex-direction:column;gap:8px}
 .diag{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;background:var(--diagbg);border-left:3px solid var(--line)}
 .diag.critical{border-left-color:#ff5c8a}.diag.error{border-left-color:var(--weak)}
@@ -200,6 +200,13 @@ border-left:1px solid var(--line);transform:translateX(100%);transition:.2s;z-in
         <button id="ha-connect">Connect</button>
         <span id="ha-stat" class="tag">off</span>
       </div></div>
+      <div class="cgroup" style="flex:1 1 360px"><label>Philips Hue bridge (name Hue devices &amp; networks)</label><div class="row">
+        <input id="hue-host" type="text" placeholder="Hue bridge IP, e.g. 192.168.1.x" style="flex:1;min-width:160px" title="the bridge's LAN IP or hostname">
+        <button id="hue-pair" title="press the bridge's round link button, then click">Pair</button>
+        <button id="hue-forget" title="disconnect and forget the Hue key">Forget</button>
+        <span id="hue-stat" class="tag">off</span>
+      </div>
+      <div id="hue-hint" class="dim" style="font-size:11px;margin-top:4px">Press the round <b>link button</b> on top of the bridge, then click <b>Pair</b> within 30 s.</div></div>
       <div class="cgroup" style="flex:1 1 300px"><label>Raw command (advanced)</label><div class="row">
         <input id="raw-type" type="text" placeholder="type" style="width:54px" title="message type, e.g. 0x81">
         <input id="raw-hex" type="text" placeholder="payload hex" style="flex:1;min-width:110px">
@@ -329,7 +336,7 @@ border-left:1px solid var(--line);transform:translateX(100%);transition:.2s;z-in
       <b>Passive</b> just listens; <b>Active</b> also sends a beacon request per channel so even idle networks reply (needs firmware ≥ 0.26).
       <span id="nw-prog" class="weak" style="margin-left:8px"></span>
     </div>
-    <div class="scroll"><table><thead><tr><th>PAN</th><th>Channel</th><th>Frames</th><th>Last seen</th><th></th></tr></thead>
+    <div class="scroll"><table><thead><tr><th>PAN</th><th>Channel</th><th>Frames</th><th>Last seen</th><th title="identified by device manufacturer (OUI) or a paired integration">Identity</th></tr></thead>
     <tbody id="nw-tbl"></tbody></table></div>
   </div>
 
@@ -851,10 +858,11 @@ async function loadNetworks(){const r=await j("/api/networks");if(!r)return;
   document.getElementById("nw-cnt").textContent=nw.length;
   document.getElementById("nw-tbl").innerHTML=nw.map(n=>{
     const mine=n.pan.toLowerCase()===ours;
+    const who=mine?'your Zigbee network':(n.label?`<b>${n.label}</b>`:'<span class=dim>neighbouring network</span>');
     return `<tr><td class=mono>${n.pan}${mine?' <span class="tag coord">yours</span>':' <span class="tag">foreign</span>'}</td>`+
       `<td>${n.channel||"–"}</td><td>${n.count}</td>`+
       `<td class=dim>${n.last_seen?ageStr(n.last_seen):""}</td>`+
-      `<td class=dim>${mine?"":"neighbouring network"}</td></tr>`;
+      `<td>${who}</td></tr>`;
   }).join("")||'<tr><td colspan=5 class=dim>no networks seen yet — capture, or run a survey</td></tr>';}
 async function startSurvey(active){if(!await gateFn("spectrum"))return;
   const what=active?"Active scan transmits a beacon request on each of the 16 Zigbee channels (~30 s) so even idle networks reply. It TX's on-air (a standard scan) and needs firmware ≥ 0.26."
@@ -892,6 +900,19 @@ function fillAtDevices(){const sel=document.getElementById("at-device");if(!sel)
 document.getElementById("at-device").onchange=e=>{if(e.target.value)document.getElementById("at-addr").value=e.target.value;};
 on("ha-connect",()=>{const h=document.getElementById("ha-host").value.trim(),t=document.getElementById("ha-token").value.trim();
   if(h&&t)fetch(`/api/ha_connect?host=${encodeURIComponent(h)}&token=${encodeURIComponent(t)}`,{method:"POST"});});
+on("hue-pair",async()=>{const h=document.getElementById("hue-host").value.trim();
+  if(!h){alert("Enter the Hue bridge IP first");return;}
+  const hint=document.getElementById("hue-hint");hint.textContent="pairing…";
+  const r=await fetch(`/api/hue_pair?host=${encodeURIComponent(h)}`,{method:"POST"}).then(x=>x.json()).catch(()=>null);
+  if(r&&r.ok){hint.textContent="✓ paired — loading Hue devices…";loadHueStatus();}
+  else hint.textContent="⚠ "+((r&&r.reason)||"pairing failed")+" — press the bridge's link button, then click Pair.";});
+on("hue-forget",async()=>{await fetch("/api/hue_forget",{method:"POST"});
+  document.getElementById("hue-hint").textContent="Hue bridge forgotten.";loadHueStatus();});
+async function loadHueStatus(){const s=await j("/api/hue_status");if(!s)return;const e=document.getElementById("hue-stat");
+  if(s.connected){e.textContent=`Hue: ${s.devices||0} devices${s.channel?" · ch "+s.channel:""}`;e.className="tag ok";e.title="bridge "+(s.host||"");}
+  else if(s.error){e.textContent="Hue error";e.className="tag err";e.title=s.error;}
+  else if(s.state==="connecting"){e.textContent="connecting…";e.className="tag";}
+  else{e.textContent="off";e.className="tag";}}
 on("raw-send",()=>{let r=document.getElementById("raw-type").value.trim();
   const t=r.toLowerCase().startsWith("0x")?parseInt(r,16):parseInt(r,10);if(isNaN(t))return;
   const h=document.getElementById("raw-hex").value.trim();
@@ -1045,10 +1066,10 @@ on("ota-go",async()=>{const f=document.getElementById("ota-file").files[0];
   else if(r)document.getElementById("ota-stat").textContent=`sent ${r.size} bytes (crc ${r.crc}) — flashing…`;});
 
 ws();bindGraphZoom();loadActive();loadFrames();initPrefs();
-setInterval(()=>{loadDevices();loadRouting();loadIncidents();loadSpectrum();loadNetworks();loadDiagnostics();loadHAStatus();loadConn();loadActive();loadRadios();if(selected)showDetail(selected);},3000);
+setInterval(()=>{loadDevices();loadRouting();loadIncidents();loadSpectrum();loadNetworks();loadDiagnostics();loadHAStatus();loadHueStatus();loadConn();loadActive();loadRadios();if(selected)showDetail(selected);},3000);
 setInterval(loadConn,1000);
 setInterval(render,500);
-loadDevices();loadRouting();loadIncidents();loadSpectrum();loadDiagnostics();loadHAStatus();loadConn();
+loadDevices();loadRouting();loadIncidents();loadSpectrum();loadDiagnostics();loadHAStatus();loadHueStatus();loadConn();
 </script>
 </body>
 </html>

@@ -27,6 +27,32 @@ powerful diagnostic: it resolves sniffed addresses to friendly names and lets yo
 - Subscribe to state changes for availability.
 - Config: HA base URL + long-lived token.
 
+## Philips Hue bridge (name Hue devices & networks)
+
+A Hue bridge is its **own Zigbee coordinator** on its own PAN/channel, separate from your ZHA
+network. Its local API exposes each device's **name + extended (IEEE) MAC** and the bridge's
+**Zigbee channel**, which the host feeds into the name registry **by extended address** (globally
+unique, so it never collides with your ZHA network's short addresses). HA/ZHA and Hue run **at the
+same time** — both feed one registry.
+
+- **Pairing (link button):** enter the bridge IP in **Config → Philips Hue bridge**, press the
+  round link button on the bridge, then click **Pair**. The host creates an application key via the
+  bridge's `POST /api` and stores it **encrypted at rest** (`hue_key` in `zbsniff.yaml`, like the HA
+  token). Endpoints: `POST /api/hue_pair?host=`, `GET /api/hue_status`, `POST /api/hue_forget`.
+- **What it names:** Hue devices the sniffer actually hears on-air (by their MAC), and — with the
+  OUI identity below — the **Hue network itself** in the *Zigbee networks* panel ("Philips Hue,
+  ch 15"). The sniffer only hears the Hue network if it's on your capture channel or during a survey.
+- Implementation: [`tether/internal/names/hue.go`](../tether/internal/names/hue.go).
+
+## Network identity by manufacturer (OUI) — no setup
+
+Every extended address begins with a 24-bit **OUI** identifying the silicon vendor. When the
+sniffer hears an extended address on a foreign PAN, it labels that network by manufacturer —
+**Philips Hue** (`00:17:88`), **Aqara/Xiaomi**, **IKEA/Silicon Labs**, **Texas Instruments**, etc.
+— with zero configuration; the Hue integration then layers real *device* names on top. The vendor
+table lives in [`tether/internal/names/oui.go`](../tether/internal/names/oui.go); add rows freely.
+See [networks.md](networks.md).
+
 ## What the correlation gives you
 
 - **Name resolution:** sniffed short/extended addresses → friendly names in every view.

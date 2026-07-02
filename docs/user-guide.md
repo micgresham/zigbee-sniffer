@@ -195,6 +195,9 @@ Everything that isn't live capture:
   stores it in the C6's NVS. Encrypted at rest in the config file.
 - **Home Assistant** — enter just the **host or IP** + a long-lived token; the app builds the URL,
   pulls friendly names and **Net LQI**, and reconnects automatically next run.
+- **Philips Hue bridge** — enter the bridge IP, press its round **link button**, then click
+  **Pair**. Names Hue devices and helps identify the Hue network in *Zigbee networks*. Runs
+  alongside Home Assistant (both name sources at once). The key is stored encrypted.
 - **Raw command** — advanced: send an arbitrary framed command.
 - **Export** — download Devices / Frames / Incidents / Diagnostics / Spectrum as CSV or JSON.
 - **Radios** — assign each connected C6 a **role** (see below), or set its radio-id.

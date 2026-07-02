@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS incidents(
  id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, addr TEXT, reason TEXT,
  rssi INT, lqi INT, channel INT, ed INT, silent_s INT, raw TEXT);
 CREATE TABLE IF NOT EXISTS route_failures(addr INTEGER PRIMARY KEY, count INT, last_reason TEXT, last_seen REAL);
-CREATE TABLE IF NOT EXISTS pans(pan INTEGER PRIMARY KEY, count INT, last_seen REAL, channel INT);
+CREATE TABLE IF NOT EXISTS pans(pan INTEGER PRIMARY KEY, count INT, last_seen REAL, channel INT, label TEXT);
 CREATE TABLE IF NOT EXISTS probe_results(
  id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, target INT, port TEXT, radio INT,
  acked INT, rssi INT, lqi INT);
@@ -75,6 +75,8 @@ func Open(path string) (*DB, error) {
 	if _, err := d.Exec(schema); err != nil {
 		return nil, err
 	}
+	// Migrate older DBs that predate the pans.label column (ignore "duplicate").
+	d.Exec(`ALTER TABLE pans ADD COLUMN label TEXT`)
 	// One-time trim: an existing DB may already hold millions of ed_samples from
 	// before the cap existed. Bring it back under edCap so queries are fast now.
 	d.Exec(`DELETE FROM ed_samples WHERE rowid <= (SELECT MAX(rowid) - ? FROM ed_samples)`, edCap)
@@ -487,21 +489,38 @@ func (d *DB) Diagnostics(ourPan int) []map[string]any {
 	return out
 }
 
+// LabelPan tags a PAN with a vendor/name label (e.g. "Philips Hue"), learned
+// from an extended address seen on that network. A friendly name (from an
+// integration) upgrades over a bare OUI vendor; we don't downgrade.
+func (d *DB) LabelPan(pan int, label string) {
+	if label == "" || pan < 0 || pan == 0xFFFF {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	// Set when empty; otherwise only overwrite if the new label is "richer"
+	// (longer usually means a device name vs a vendor). Cheap heuristic.
+	d.db.Exec(`UPDATE pans SET label=? WHERE pan=? AND (label IS NULL OR label='' OR length(?)>length(label))`,
+		label, pan, label)
+}
+
 // Networks returns every PAN id seen on-air (yours + foreign), busiest first.
 func (d *DB) Networks() []map[string]any {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	rows, _ := d.db.Query(`SELECT pan,count,channel,last_seen FROM pans ORDER BY count DESC`)
+	rows, _ := d.db.Query(`SELECT pan,count,channel,last_seen,label FROM pans ORDER BY count DESC`)
 	var out []map[string]any
 	if rows != nil {
 		defer rows.Close()
 		for rows.Next() {
 			var pan, count, ch sql.NullInt64
 			var ls sql.NullFloat64
-			rows.Scan(&pan, &count, &ch, &ls)
+			var label sql.NullString
+			rows.Scan(&pan, &count, &ch, &ls, &label)
 			out = append(out, map[string]any{
 				"pan": fmt.Sprintf("0x%04x", uint16(pan.Int64)),
 				"count": count.Int64, "channel": ch.Int64, "last_seen": ls.Float64,
+				"label": label.String,
 			})
 		}
 	}

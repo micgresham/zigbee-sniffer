@@ -66,10 +66,10 @@ mutex. Two things keep it fast under long runs:
 ### Config
 
 `zbsniff.yaml` is a flat, human-editable key/value file (edit while stopped). Keys include
-`channel`, `db`, `http_port`, `ports`, `ha_host`, `zha_backup`, `radio_roles`, `hop_dwell_ms`,
-`mode`, `incident_silence_s`, and `ui.<key>` web-UI preferences. **Secrets are encrypted at rest:**
-the Zigbee network `key` and the HA `ha_token` are stored as `enc:…` (AES-256-GCM) using a sidecar
-key file (`zbsniff.yaml.key`, 0600). Plaintext values you hand-edit are re-encrypted on the next
+`channel`, `db`, `http_port`, `ports`, `ha_host`, `hue_host`, `zha_backup`, `radio_roles`,
+`hop_dwell_ms`, `mode`, `incident_silence_s`, and `ui.<key>` web-UI preferences. **Secrets are
+encrypted at rest:** the Zigbee network `key`, the HA `ha_token`, and the Hue `hue_key` are stored
+as `enc:…` (AES-256-GCM) using a sidecar key file (`zbsniff.yaml.key`, 0600). Plaintext values you hand-edit are re-encrypted on the next
 save. Don't commit `zbsniff.yaml` / `.key` (they're gitignored).
 
 ## Python host (legacy / CLI / pcap)

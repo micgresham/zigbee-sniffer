@@ -16,6 +16,8 @@ import (
 type Config struct {
 	HAHost    string   // Home Assistant host or IP (URL is built from this)
 	HAToken   string   // long-lived access token (encrypted at rest)
+	HueHost   string   // Philips Hue bridge host or IP
+	HueKey    string   // Hue application key (encrypted at rest)
 	Channel   int      // capture channel 11..26
 	Key       string   // Zigbee network key (hex; encrypted at rest)
 	DB        string   // SQLite path
@@ -62,6 +64,10 @@ func Load(path string) *Config {
 			c.HAHost = v
 		case "ha_token":
 			c.HAToken = v
+		case "hue_host":
+			c.HueHost = v
+		case "hue_key":
+			c.HueKey = v
 		case "channel":
 			c.Channel, _ = strconv.Atoi(v)
 		case "key":
@@ -96,6 +102,7 @@ func Load(path string) *Config {
 	// and get encrypted on the next Save — e.g. a hand-edited key).
 	c.HAToken = decryptField(c.secretKey, c.HAToken)
 	c.Key = decryptField(c.secretKey, c.Key)
+	c.HueKey = decryptField(c.secretKey, c.HueKey)
 	return c
 }
 
@@ -110,6 +117,8 @@ func (c *Config) Save(path string) error {
 	}
 	w("ha_host", c.HAHost)
 	w("ha_token", encryptField(c.secretKey, c.HAToken)) // encrypted at rest
+	w("hue_host", c.HueHost)
+	w("hue_key", encryptField(c.secretKey, c.HueKey)) // encrypted at rest
 	if c.Channel > 0 {
 		fmt.Fprintf(&b, "channel: %d\n", c.Channel)
 	}

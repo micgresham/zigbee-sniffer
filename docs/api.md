@@ -34,6 +34,8 @@ binary command frames (`set_channel`, `set_mode`, `ed_scan`, `set_key`).
 | GET | `/api/export/pcap?from=&to=` | pcap (LINKTYPE_IEEE802_15_4_TAP) of a time range |
 | GET/PUT | `/api/config` | settings (channels, key, hop, HA integration, thresholds) |
 | GET | `/api/radios` | connected radios + roles |
+| POST | `/api/ha_connect?host=&token=` · GET `/api/ha_status` | Home Assistant / ZHA name integration |
+| POST | `/api/hue_pair?host=` · GET `/api/hue_status` · POST `/api/hue_forget` | Philips Hue bridge (link-button pairing, then device names) |
 
 Endpoints are registered in [`tether/internal/api/server.go`](../tether/internal/api/server.go);
 the JSON responses are plain maps (no formal schema). Additional live endpoints exist there

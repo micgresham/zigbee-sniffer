@@ -118,6 +118,7 @@ type Server struct {
 	Reg  *names.Registry  // optional name resolution (ZHA backup / HA API)
 	RT    *runtime.Runtime // mutable key + latest device status
 	HA    *names.HAManager // runtime HA connection
+	Hue   *names.HueManager // runtime Philips Hue bridge connection
 	Stats *stats.Stats     // connection/ingest counters
 	Logs  *logbuf.Buf      // host log ring
 	Web   []byte           // embedded index.html
@@ -810,6 +811,41 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		writeJSON(w, map[string]any{"connected": false})
+	})
+	// Philips Hue bridge: pair (link-button), status, and forget.
+	mux.HandleFunc("/api/hue_pair", func(w http.ResponseWriter, r *http.Request) {
+		host := r.URL.Query().Get("host")
+		if host == "" || s.Hue == nil {
+			writeJSON(w, map[string]any{"ok": false, "reason": "enter the bridge IP/host first"})
+			return
+		}
+		key, err := names.HuePair(host)
+		if err != nil {
+			// Most common: the link button hasn't been pressed yet.
+			writeJSON(w, map[string]any{"ok": false, "reason": err.Error()})
+			return
+		}
+		s.Hue.Connect(host, key)
+		if s.SaveConfig != nil {
+			s.SaveConfig(func(c *config.Config) { c.HueHost = host; c.HueKey = key })
+		}
+		writeJSON(w, map[string]any{"ok": true, "paired": true})
+	})
+	mux.HandleFunc("/api/hue_status", func(w http.ResponseWriter, r *http.Request) {
+		if s.Hue != nil {
+			writeJSON(w, s.Hue.Status())
+			return
+		}
+		writeJSON(w, map[string]any{"connected": false})
+	})
+	mux.HandleFunc("/api/hue_forget", func(w http.ResponseWriter, r *http.Request) {
+		if s.Hue != nil {
+			s.Hue.Connect("", "")
+		}
+		if s.SaveConfig != nil {
+			s.SaveConfig(func(c *config.Config) { c.HueHost = ""; c.HueKey = "" })
+		}
+		writeJSON(w, map[string]any{"ok": true})
 	})
 	// Save current key to the device's NVS (so it persists across power cycles).
 	mux.HandleFunc("/api/save_key", func(w http.ResponseWriter, r *http.Request) {
