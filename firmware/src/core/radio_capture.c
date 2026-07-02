@@ -8,12 +8,31 @@
 #include "esp_ieee802154.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "radio";
 
 #define CAPTURE_QUEUE_DEPTH 48
 
-static QueueHandle_t s_queue;
+static QueueHandle_t     s_queue;
+static SemaphoreHandle_t s_radio_mtx;   // serializes HAL access across tasks
+
+// Lazily create the mutex so radio_lock() is safe to call before init.
+static void ensure_mtx(void)
+{
+    if (!s_radio_mtx) s_radio_mtx = xSemaphoreCreateMutex();
+}
+
+void radio_lock(void)
+{
+    ensure_mtx();
+    xSemaphoreTake(s_radio_mtx, portMAX_DELAY);
+}
+
+void radio_unlock(void)
+{
+    if (s_radio_mtx) xSemaphoreGive(s_radio_mtx);
+}
 static volatile uint8_t  s_channel;
 static volatile uint8_t  s_radio_id;
 static volatile uint32_t s_count;
@@ -53,6 +72,7 @@ void radio_capture_init(uint8_t channel, uint8_t radio_id)
 {
     s_channel = channel;
     s_radio_id = radio_id;
+    ensure_mtx();
     s_queue = xQueueCreate(CAPTURE_QUEUE_DEPTH, sizeof(captured_frame_t));
 
     ESP_ERROR_CHECK(esp_ieee802154_enable());   // inits the 154 PHY (also satisfies sleep retention)

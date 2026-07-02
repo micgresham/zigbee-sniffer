@@ -28,6 +28,9 @@ CREATE TABLE IF NOT EXISTS links(
  src INT, dst INT, count INT, last_lqi INT, last_rssi INT, last_seen REAL,
  PRIMARY KEY(src,dst));
 CREATE TABLE IF NOT EXISTS ed_samples(ts REAL, channel INT, ed_dbm INT, sweep_id INT, radio INT);
+CREATE INDEX IF NOT EXISTS idx_ed_ts ON ed_samples(ts);
+CREATE INDEX IF NOT EXISTS idx_ed_channel ON ed_samples(channel);
+CREATE INDEX IF NOT EXISTS idx_packets_ts ON packets(ts);
 CREATE TABLE IF NOT EXISTS incidents(
  id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, addr TEXT, reason TEXT,
  rssi INT, lqi INT, channel INT, ed INT, silent_s INT, raw TEXT);
@@ -42,10 +45,18 @@ CREATE TABLE IF NOT EXISTS schedules(
  interval_s INT, enabled INT, created REAL, last_run REAL, runs INT, acks INT);
 `
 
+// edCap bounds the ed_samples table. A continuous ED sweep writes thousands of
+// rows/minute; left unbounded the table reaches millions of rows and the
+// Spectrum/diagnostics queries (which scan it) take seconds — and because every
+// DB call is serialized under d.mu, that slow query starves frame ingest and
+// freezes the whole app. We keep only the most recent edCap rows.
+const edCap = 60000
+
 // DB wraps the SQLite connection.
 type DB struct {
-	mu sync.Mutex
-	db *sql.DB
+	mu       sync.Mutex
+	db       *sql.DB
+	edWrites int // counter for periodic ed_samples pruning
 }
 
 // Open opens (or creates) the database at path (":memory:" for in-memory).
@@ -55,9 +66,18 @@ func Open(path string) (*DB, error) {
 		return nil, err
 	}
 	d.SetMaxOpenConns(1) // serialize; simplest correct option for SQLite
+	// WAL + a busy timeout keep writes from blocking as hard under read load.
+	for _, p := range []string{
+		"PRAGMA journal_mode=WAL", "PRAGMA synchronous=NORMAL", "PRAGMA busy_timeout=5000",
+	} {
+		d.Exec(p)
+	}
 	if _, err := d.Exec(schema); err != nil {
 		return nil, err
 	}
+	// One-time trim: an existing DB may already hold millions of ed_samples from
+	// before the cap existed. Bring it back under edCap so queries are fast now.
+	d.Exec(`DELETE FROM ed_samples WHERE rowid <= (SELECT MAX(rowid) - ? FROM ed_samples)`, edCap)
 	return &DB{db: d}, nil
 }
 
@@ -147,12 +167,18 @@ func (d *DB) upsertDevice(addr int, ts float64, rssi, lqi, channel int) {
 	}
 }
 
-// IngestED stores an energy-detect sample.
+// IngestED stores an energy-detect sample, pruning old rows periodically so the
+// table stays bounded (see edCap).
 func (d *DB) IngestED(ts float64, channel, edDBm, sweepID, radio int) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.db.Exec(`INSERT INTO ed_samples(ts,channel,ed_dbm,sweep_id,radio) VALUES(?,?,?,?,?)`,
 		ts, channel, edDBm, sweepID, radio)
+	// Amortize pruning: every 1024 inserts, drop everything beyond the newest
+	// edCap rows. rowid is monotonic, so this is an indexed range delete.
+	if d.edWrites++; d.edWrites%1024 == 0 {
+		d.db.Exec(`DELETE FROM ed_samples WHERE rowid <= (SELECT MAX(rowid) - ? FROM ed_samples)`, edCap)
+	}
 }
 
 // IngestIncident stores an incident from the device JSON.

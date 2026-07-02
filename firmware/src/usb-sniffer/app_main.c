@@ -153,19 +153,31 @@ static void handle_command(uint8_t type, const uint8_t *p, uint16_t len)
 {
     switch (type) {
     case CMD_SET_CHANNEL:
-        if (len >= 1) { radio_capture_set_channel(p[0]); s_cfg.channel = p[0]; config_save(&s_cfg); }
+        if (len >= 1) {
+            radio_lock();
+            radio_capture_set_channel(p[0]);
+            radio_unlock();
+            s_cfg.channel = p[0]; config_save(&s_cfg);
+        }
         send_ack(type, 0);
         break;
     case CMD_SET_MODE:
+        // Mode is just a flag the main loop reads — no radio HAL here, so no lock
+        // is needed. This is deliberately cheap so a mode change is honored even
+        // while the main loop holds the radio for a sweep.
         if (len >= 1) s_mode = p[0];
         send_ack(type, 0);
         break;
     case CMD_START:
+        radio_lock();
         radio_capture_start();
+        radio_unlock();
         send_ack(type, 0);
         break;
     case CMD_STOP:
+        radio_lock();
         radio_capture_stop();
+        radio_unlock();
         send_ack(type, 0);
         break;
     case CMD_SET_HOP:
@@ -179,7 +191,9 @@ static void handle_command(uint8_t type, const uint8_t *p, uint16_t len)
         if (len >= 6) {
             uint32_t mask = (uint32_t)p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24);
             uint32_t dwell_ms = (uint16_t)p[4] | (p[5] << 8);
+            radio_lock();  // don't collide with a continuous sweep on the main loop
             ed_sweep(mask, dwell_ms * 1000, ed_cb, NULL);
+            radio_unlock();
         }
         send_ack(type, 0);
         break;
@@ -199,12 +213,16 @@ static void handle_command(uint8_t type, const uint8_t *p, uint16_t len)
         if (len >= 4) {
             uint16_t target = (uint16_t)p[0] | (p[1] << 8);
             uint16_t pan    = (uint16_t)p[2] | (p[3] << 8);
+            radio_lock();
             probe_send(target, pan);
+            radio_unlock();
         }
         send_ack(type, 0);
         break;
     case CMD_BEACON_REQ:
+        radio_lock();
         beacon_request_send();
+        radio_unlock();
         send_ack(type, 0);
         break;
     case CMD_OTA_BEGIN:
@@ -213,7 +231,9 @@ static void handle_command(uint8_t type, const uint8_t *p, uint16_t len)
             uint32_t total = (uint32_t)p[1] | (p[2] << 8) | (p[3] << 16) | ((uint32_t)p[4] << 24);
             uint32_t crc   = (uint32_t)p[5] | (p[6] << 8) | (p[7] << 16) | ((uint32_t)p[8] << 24);
             if (target == 0) {
+                radio_lock();
                 radio_capture_stop();  // free the radio during flash writes
+                radio_unlock();
                 ota_begin(total, crc);
                 send_ota_status(target);
             } else {
@@ -300,7 +320,14 @@ void app_main(void)
                 if (n) transport_usb_write(out, n);
             }
         } else if (s_mode == MODE_ED_SWEEP) {
+            // Sweep under the radio lock so a command-task op (a one-shot scan,
+            // probe/beacon TX, channel change) can't drive the HAL concurrently
+            // and hang it. The lock is released each iteration, so a mode change
+            // (which only sets s_mode, no lock needed) is honored on the next
+            // pass and the sweep stops promptly.
+            radio_lock();
             ed_sweep(s_hop_mask, (s_hop_dwell_ms ? s_hop_dwell_ms : 5) * 1000, ed_cb, NULL);
+            radio_unlock();
             vTaskDelay(pdMS_TO_TICKS(50));
         } else {
             vTaskDelay(pdMS_TO_TICKS(20));
@@ -312,6 +339,7 @@ void app_main(void)
         if (s_hop_dwell_ms && (s_mode == MODE_CAPTURE) &&
             (now - last_hop) / 1000 >= s_hop_dwell_ms) {
             last_hop = now;
+            radio_lock();
             for (int tries = 0; tries < 16; tries++) {
                 hop_idx = (hop_idx + 1) % 16;
                 if (s_hop_mask & (1u << hop_idx)) {
@@ -319,6 +347,7 @@ void app_main(void)
                     break;
                 }
             }
+            radio_unlock();
         }
 
         // Periodic status heartbeat (~1 Hz).
