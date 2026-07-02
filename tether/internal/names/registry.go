@@ -28,11 +28,68 @@ type Registry struct {
 	m     map[uint16]string
 	net   map[uint16]NetSig
 	byExt map[uint64]string // extended (IEEE) address -> name (e.g. from a Hue bridge)
+	extOf map[uint16]uint64 // short address -> its extended (IEEE) address (learned on-air)
 }
 
 // New returns an empty registry.
 func New() *Registry {
-	return &Registry{m: map[uint16]string{}, net: map[uint16]NetSig{}, byExt: map[uint64]string{}}
+	return &Registry{m: map[uint16]string{}, net: map[uint16]NetSig{},
+		byExt: map[uint64]string{}, extOf: map[uint16]uint64{}}
+}
+
+// SetShortExt records a short<->extended address mapping, learned from a frame
+// that carries both (e.g. the NWK header's source short + source IEEE). This is
+// what lets us attach an extended-address name (Hue) or vendor (OUI) to the
+// short addresses the rest of the app works in.
+func (r *Registry) SetShortExt(short uint16, ext uint64) {
+	if ext == 0 {
+		return
+	}
+	r.mu.Lock()
+	r.extOf[short] = ext
+	r.mu.Unlock()
+}
+
+// NameFull returns a real device name for a short address: a friendly name if
+// known, else a name for its extended address (e.g. from a Hue bridge), else "".
+func (r *Registry) NameFull(hexAddr string) string {
+	short, ok := parseShort(hexAddr)
+	if !ok {
+		return ""
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if n := r.m[short]; n != "" {
+		return n
+	}
+	if ext := r.extOf[short]; ext != 0 {
+		return r.byExt[ext]
+	}
+	return ""
+}
+
+// Mfg returns the manufacturer (OUI) label for a short address, via its learned
+// extended address, or "". Used as a fallback when no name is available.
+func (r *Registry) Mfg(hexAddr string) string {
+	short, ok := parseShort(hexAddr)
+	if !ok {
+		return ""
+	}
+	r.mu.RLock()
+	ext := r.extOf[short]
+	r.mu.RUnlock()
+	if ext == 0 {
+		return ""
+	}
+	return vendorForExt(ext)
+}
+
+func parseShort(hexAddr string) (uint16, bool) {
+	v, err := strconv.ParseUint(strings.TrimPrefix(hexAddr, "0x"), 16, 16)
+	if err != nil {
+		return 0, false
+	}
+	return uint16(v), true
 }
 
 // SetExt records a name for an extended (IEEE) address. Extended addresses are
@@ -193,6 +250,13 @@ func (r *Registry) LoadZHABackup(path string) (int, error) {
 			short = fmt.Sprintf("…%s:%s", parts[len(parts)-2], parts[len(parts)-1])
 		}
 		r.Set(uint16(nwk), short)
+		// Record the full IEEE so our own devices resolve their manufacturer (OUI)
+		// immediately, without waiting to overhear an IEEE-bearing frame.
+		if clean := strings.NewReplacer(":", "", "-", "", " ", "").Replace(ieee); len(clean) == 16 {
+			if ext, err := strconv.ParseUint(clean, 16, 64); err == nil {
+				r.SetShortExt(uint16(nwk), ext)
+			}
+		}
 		n++
 	}
 	return n, nil

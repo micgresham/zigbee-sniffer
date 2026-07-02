@@ -344,7 +344,11 @@ func (s *Server) enrich(rows []map[string]any) []map[string]any {
 			continue
 		}
 		if r["name"] == "" || r["name"] == nil {
-			r["name"] = s.Reg.Name(addr)
+			r["name"] = s.Reg.NameFull(addr) // friendly name, or a Hue-bridge name
+		}
+		// Manufacturer (OUI) fallback shown when no name is available.
+		if mfg := s.Reg.Mfg(addr); mfg != "" {
+			r["mfg"] = mfg
 		}
 		if net, ok := s.Reg.Net(addr); ok {
 			if net.HasLQI {

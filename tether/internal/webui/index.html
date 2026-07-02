@@ -454,7 +454,7 @@ const j=u=>fetch(u).then(r=>r.json()).catch(()=>null);
 function addrName(hex){hex=hex.toLowerCase();
   if(hex==="0x0000")return "Coordinator";
   if(hex==="0xffff")return "broadcast";
-  const d=devices.find(x=>x.addr===hex);return d&&d.name?d.name:null;}
+  const d=devices.find(x=>x.addr===hex);return d?(d.name||d.mfg||null):null;}
 function annotate(s){return (s||"").replace(/0x[0-9a-fA-F]{4}/g,m=>{const n=addrName(m);return n?`${n} (${m})`:m;});}
 // Friendly name if known, else the raw address (used in tables/chips everywhere).
 function addrLabel(hex){return addrName(hex)||hex;}
@@ -476,7 +476,8 @@ async function loadDevices(){const d=await j("/api/devices");if(!d)return;device
    const q=rssiQ(x.last_rssi);
    const net=x.net_lqi!=null?`<span class="${lqiClass(x.net_lqi)}">${x.net_lqi}</span>`:'<span class=dim title="connect Home Assistant to see the network\'s view">—</span>';
    const netr=x.net_rssi!=null?`${x.net_rssi}`:'<span class=dim>—</span>';
-   return `<tr class=click data-addr="${x.addr}"><td class=mono>${x.addr}</td><td>${x.name||""}</td><td>${role}</td>`+
+   const nm=x.name?x.name:(x.mfg?`<span class=dim style="font-style:italic" title="identified by manufacturer (OUI) — no device name available">${x.mfg}</span>`:"");
+   return `<tr class=click data-addr="${x.addr}"><td class=mono>${x.addr}</td><td>${nm}</td><td>${role}</td>`+
    `<td>${x.last_rssi??""}</td><td class="${qClass(q)}">${q!=null?q+"%":""}</td><td>${net}</td><td class=dim>${netr}</td><td>${x.count}</td>`+
    `<td class=dim>${x.last_seen?ageStr(x.last_seen):""}</td></tr>`;}).join("")||
    `<tr><td colspan=9 class=dim>no devices yet — is the channel right? click “Scan spectrum” to check noise.</td></tr>`;
@@ -644,7 +645,7 @@ function bfsPath(adj,from,to){if(from===to)return [from];
 function renderGraph(){
   const svg=document.getElementById("routing");
   const adj=new Map(),nodes=new Set(),nameOf={},deg={};
-  (routing.nodes||[]).forEach(n=>{nodes.add(n.addr);nameOf[n.addr]=n.name;});
+  (routing.nodes||[]).forEach(n=>{nodes.add(n.addr);nameOf[n.addr]=n.name||n.mfg;});
   (routing.edges||[]).forEach(e=>{nodes.add(e.src);nodes.add(e.dst);
     (adj.get(e.src)||adj.set(e.src,new Set()).get(e.src)).add(e.dst);
     (adj.get(e.dst)||adj.set(e.dst,new Set()).get(e.dst)).add(e.src);});
@@ -767,7 +768,7 @@ async function showDetail(addr){if(!addr||addr==="—")return;selected=addr;
   const phist=ph.history||[];
   document.getElementById("dbody").innerHTML=
    `<div class=kv><div>Address</div><div class=mono>${addr}</div>`+
-   `<div>Name</div><div>${dev.name||'<span class=dim>unknown — add --zha-backup or --ha-host</span>'}</div>`+
+   `<div>Name</div><div>${dev.name||(dev.mfg?`<span class=dim style="font-style:italic">${dev.mfg}</span> <span class=dim>(manufacturer — no device name)</span>`:'<span class=dim>unknown — add --zha-backup, --ha-host, or pair Hue</span>')}</div>`+
    `<div>Role</div><div>${dev.role||'<span class=dim>?</span>'}</div>`+
    `<div>Sniffer signal ⌖</div><div>${dev.last_rssi??'?'} dBm · <span class="${qClass(rssiQ(dev.last_rssi))}">${rssiQ(dev.last_rssi)!=null?rssiQ(dev.last_rssi)+'%':'?'}</span> <span class=dim>(heard at the sniffer's location)</span></div>`+
    `<div>Network signal</div><div>${dev.net_lqi!=null?`LQI <span class="${lqiClass(dev.net_lqi)}">${dev.net_lqi}</span>${dev.net_rssi?' · '+dev.net_rssi+' dBm':''} <span class=dim>(coordinator's view of the real link)</span>`:'<span class=dim>— connect Home Assistant to see this</span>'}</div>`+
@@ -891,8 +892,8 @@ document.getElementById("rg-sy").oninput=e=>{rgSy=+e.target.value;rgDirty=true;}
 document.getElementById("rg-isolate").onchange=e=>{rgIsolate=e.target.value;rgSig="";renderGraph();rgReheat(1);};
 on("rg-netlqi",()=>{rgShowNetLqi=!rgShowNetLqi;
   document.getElementById("rg-netlqi").classList.toggle("on",rgShowNetLqi);rgDirty=true;savePref("net_lqi",rgShowNetLqi?"1":"0");});
-function deviceOpts(){return devices.slice().sort((a,b)=>(a.name||a.addr).localeCompare(b.name||b.addr))
-    .map(d=>`<option value="${d.addr}">${d.name?d.name+" ("+d.addr+")":d.addr}</option>`).join("");}
+function deviceOpts(){return devices.slice().sort((a,b)=>((a.name||a.mfg||a.addr)).localeCompare(b.name||b.mfg||b.addr))
+    .map(d=>{const n=d.name||d.mfg;return `<option value="${d.addr}">${n?n+" ("+d.addr+")":d.addr}</option>`;}).join("");}
 function fillIsolate(){const sel=document.getElementById("rg-isolate");if(!sel)return;
   const cur=sel.value;sel.innerHTML='<option value="">All devices</option>'+deviceOpts();sel.value=cur;}
 function fillAtDevices(){const sel=document.getElementById("at-device");if(!sel)return;
