@@ -478,7 +478,14 @@ async function loadDevices(){const d=await j("/api/devices");if(!d)return;device
 async function loadRouting(){const r=await j("/api/routing");if(!r)return;routing=r;
   document.getElementById("r-cnt").textContent=(r.edges||[]).length+" links";renderGraph();}
 function whenStr(ts){if(!ts)return"";const d=new Date(ts*1000);
-  return isNaN(d)?Math.round(ts)+"s":d.toLocaleTimeString();}
+  if(isNaN(d))return Math.round(ts)+"s";
+  // human-friendly absolute time with date (e.g. "Jul 2, 4:51:02 PM"), plus a
+  // relative hint for recent events so dropouts read at a glance.
+  const abs=d.toLocaleString([],{month:"short",day:"numeric",hour:"numeric",minute:"2-digit",second:"2-digit"});
+  const age=Math.floor(Date.now()/1000-ts);
+  let rel="";
+  if(age>=0&&age<86400)rel=age<60?age+"s ago":age<3600?Math.floor(age/60)+"m ago":Math.floor(age/3600)+"h ago";
+  return rel?`${abs} · ${rel}`:abs;}
 async function loadIncidents(){const i=await j("/api/incidents");if(!i)return;
   document.getElementById("i-cnt").textContent=i.length;
   document.getElementById("incidents").innerHTML=i.map(x=>{
