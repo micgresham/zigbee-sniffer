@@ -36,6 +36,21 @@ Main-task stack overflow. Two causes were fixed and are worth knowing if you add
 The decoded backtrace shows `Stack pointer` below the `Stack bounds` lower limit — that's the
 tell-tale overflow signature.
 
+## "host up — no device data" (link goes quiet, device is fine)
+
+The ESP32-C6 USB Serial/JTAG link can stop delivering data **without the OS reporting an error**
+(a macOS CDC quirk), so the host's reader doesn't see a drop. Symptom: the header shows
+*host up — no device data* / *no new frames* while the device is actually alive (its `uptime`
+keeps climbing after a reconnect).
+
+The host now **self-heals**: a liveness watchdog forces a serial reconnect if no framed message
+arrives for ~8 s, so it recovers in a few seconds (`watchdog: no device data … forcing reconnect`
+in the log). You can also hit reconnect manually. If it recurs constantly, try a different
+USB cable/port or a powered hub — the native-USB port is sensitive to marginal power.
+
+Note: when the sniffer briefly goes deaf like this, it is *not* a device dropout, so the incident
+detector deliberately **suppresses** the "silence" flood it would otherwise log for every device.
+
 ## No frames captured
 
 1. **Wrong channel.** Pin to your HA channel (`--channel`); find it in ZHA Network settings or

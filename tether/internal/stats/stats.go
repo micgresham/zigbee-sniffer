@@ -24,6 +24,17 @@ func New() *Stats { s := &Stats{}; s.Port.Store(""); return s }
 // Touch records that a framed message arrived now.
 func (s *Stats) Touch() { s.Msgs.Add(1); s.lastMsgUtc.Store(time.Now().UnixMilli()) }
 
+// LastMsgAge is the time since the last framed message. It returns 0 when no
+// message has ever arrived (so a liveness watchdog doesn't trip before the
+// initial connection produces data).
+func (s *Stats) LastMsgAge() time.Duration {
+	last := s.lastMsgUtc.Load()
+	if last == 0 {
+		return 0
+	}
+	return time.Since(time.UnixMilli(last))
+}
+
 // Snapshot returns a JSON-ready view of the counters.
 func (s *Stats) Snapshot() map[string]any {
 	last := s.lastMsgUtc.Load()

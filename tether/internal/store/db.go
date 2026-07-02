@@ -215,6 +215,16 @@ func (d *DB) DetectIncidents(thresholdS int, now float64) []map[string]any {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	// If the sniffer itself has heard NOTHING for a full threshold window, this is
+	// a capture outage (link/radio dropped), not devices failing — every device
+	// would trip at once (including the coordinator). Suppress the false flood;
+	// real dropouts are detected while other devices are still being heard.
+	var maxSeen sql.NullFloat64
+	d.db.QueryRow(`SELECT MAX(last_seen) FROM devices`).Scan(&maxSeen)
+	if maxSeen.Valid && now-maxSeen.Float64 >= float64(thresholdS) {
+		return nil
+	}
+
 	// Latest energy reading per channel (approximate "energy now").
 	edByCh := map[int]int{}
 	if rows, err := d.db.Query(`SELECT channel, ed_dbm FROM ed_samples WHERE rowid IN (SELECT MAX(rowid) FROM ed_samples GROUP BY channel)`); err == nil {
