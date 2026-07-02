@@ -26,6 +26,9 @@ type Config struct {
 	RadioRoles string
 	HopDwellMs int // channel-hop dwell (0 = pinned)
 	Mode       int // capture mode (1=capture 2=ed 3=cap+ed 0=idle)
+	// IncidentSilenceS: a known device silent longer than this (seconds) logs a
+	// "silence" incident (0 → use the default). See analytics/incidents detector.
+	IncidentSilenceS int
 	// UIPrefs holds web-UI preferences (theme, routing spacing, filters…), stored
 	// as `ui.<key>: <value>` lines so they persist and are human-editable.
 	UIPrefs map[string]string
@@ -75,6 +78,8 @@ func Load(path string) *Config {
 			c.HopDwellMs, _ = strconv.Atoi(v)
 		case "mode":
 			c.Mode, _ = strconv.Atoi(v)
+		case "incident_silence_s":
+			c.IncidentSilenceS, _ = strconv.Atoi(v)
 		case "ports":
 			for _, p := range strings.Split(v, ",") {
 				if p = strings.TrimSpace(p); p != "" {
@@ -120,6 +125,9 @@ func (c *Config) Save(path string) error {
 	}
 	if c.Mode > 0 {
 		fmt.Fprintf(&b, "mode: %d\n", c.Mode)
+	}
+	if c.IncidentSilenceS > 0 {
+		fmt.Fprintf(&b, "incident_silence_s: %d\n", c.IncidentSilenceS)
 	}
 	if len(c.Ports) > 0 {
 		w("ports", strings.Join(c.Ports, ","))

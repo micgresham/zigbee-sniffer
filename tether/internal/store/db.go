@@ -185,12 +185,104 @@ func (d *DB) IngestED(ts float64, channel, edDBm, sweepID, radio int) {
 func (d *DB) IngestIncident(data map[string]any) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.insertIncidentLocked(data)
+}
+
+// insertIncidentLocked writes one incident row. Caller must hold d.mu.
+func (d *DB) insertIncidentLocked(data map[string]any) {
 	raw, _ := json.Marshal(data)
 	get := func(k string) any { return data[k] }
 	d.db.Exec(`INSERT INTO incidents(ts,addr,reason,rssi,lqi,channel,ed,silent_s,raw)
 	           VALUES(?,?,?,?,?,?,?,?,?)`,
 		get("ts"), get("addr"), get("reason"), get("rssi"), get("lqi"),
 		get("ch"), get("ed"), get("silent_s"), string(raw))
+}
+
+// incidentMinFrames: only devices we've heard at least this many times are
+// candidates — avoids flagging a device seen once in passing.
+const incidentMinFrames = 5
+
+// DetectIncidents scans known devices for silence and recovery against
+// thresholdS (seconds) and logs any NEW incidents, stamping each with the
+// channel's energy at detection time (the "was it interference?" evidence).
+// Down-state is derived from the incidents table itself (latest silence vs
+// recovered per device), so it survives host restarts and never double-fires.
+// Returns the incidents it just logged so the caller can broadcast them live.
+func (d *DB) DetectIncidents(thresholdS int, now float64) []map[string]any {
+	if thresholdS <= 0 {
+		thresholdS = 120
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	// Latest energy reading per channel (approximate "energy now").
+	edByCh := map[int]int{}
+	if rows, err := d.db.Query(`SELECT channel, ed_dbm FROM ed_samples WHERE rowid IN (SELECT MAX(rowid) FROM ed_samples GROUP BY channel)`); err == nil {
+		for rows.Next() {
+			var ch, ed int
+			rows.Scan(&ch, &ed)
+			edByCh[ch] = ed
+		}
+		rows.Close()
+	}
+
+	// Current down-state: the most recent silence/recovered incident per device.
+	down := map[string]bool{}
+	if rows, err := d.db.Query(`SELECT addr, reason FROM incidents
+	    WHERE id IN (SELECT MAX(id) FROM incidents WHERE reason IN ('silence','recovered') GROUP BY addr)`); err == nil {
+		for rows.Next() {
+			var a, r string
+			rows.Scan(&a, &r)
+			down[a] = r == "silence"
+		}
+		rows.Close()
+	}
+
+	// Snapshot candidate devices, then evaluate (can't insert while iterating the
+	// same connection's rows).
+	type cand struct {
+		addr, rssi, lqi, ch int
+		last                float64
+	}
+	var cands []cand
+	if rows, err := d.db.Query(`SELECT addr,last_seen,last_rssi,last_lqi,last_channel,count
+	    FROM devices WHERE count >= ?`, incidentMinFrames); err == nil {
+		for rows.Next() {
+			var c cand
+			var cnt int
+			rows.Scan(&c.addr, &c.last, &c.rssi, &c.lqi, &c.ch, &cnt)
+			cands = append(cands, c)
+		}
+		rows.Close()
+	}
+
+	var logged []map[string]any
+	for _, c := range cands {
+		if c.last <= 0 {
+			continue
+		}
+		silent := int(now - c.last)
+		addrHex := fmt.Sprintf("0x%04x", uint16(c.addr))
+		isDown := down[addrHex]
+		switch {
+		case silent >= thresholdS && !isDown:
+			inc := map[string]any{
+				"ts": now, "addr": addrHex, "reason": "silence",
+				"rssi": c.rssi, "lqi": c.lqi, "ch": c.ch,
+				"ed": edByCh[c.ch], "silent_s": silent,
+			}
+			d.insertIncidentLocked(inc)
+			logged = append(logged, inc)
+		case silent < thresholdS && isDown:
+			inc := map[string]any{
+				"ts": now, "addr": addrHex, "reason": "recovered",
+				"rssi": c.rssi, "lqi": c.lqi, "ch": c.ch, "silent_s": silent,
+			}
+			d.insertIncidentLocked(inc)
+			logged = append(logged, inc)
+		}
+	}
+	return logged
 }
 
 // Devices returns the device registry as JSON-ready maps.

@@ -84,7 +84,10 @@ Your home base — three panels:
 - Edge colour = link quality **as heard by the sniffer**; a **dashed** line means we haven't yet
   observed that device's parent.
 
-**Incidents.** Timestamped events the firmware/host flagged (silences, route failures…).
+**Incidents.** Timestamped dropout events the host flags automatically: a device that was
+heard regularly then **went silent** past the threshold (with the channel's energy at that
+moment), and a **recovered** entry when it returns. Tune the silence threshold in **Config →
+Incident detection** (default 120 s). This is the log that catches devices dropping off.
 
 ---
 

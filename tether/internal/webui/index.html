@@ -227,6 +227,22 @@ border-left:1px solid var(--line);transform:translateX(100%);transition:.2s;z-in
   </div>
 
   <div class="panel wide" data-tab="config">
+    <h2>Incident detection <span class="dim" style="font-weight:400;text-transform:none;font-size:11px">— catch devices that drop off (go silent) and recover</span></h2>
+    <div class="row" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <label class="dim">Silence threshold
+        <input id="cfg-silence" type="number" min="10" max="86400" step="10" style="width:80px"> seconds</label>
+      <button id="cfg-silence-save">Save</button>
+      <span id="cfg-silence-stat" class="weak" style="font-size:11px"></span>
+    </div>
+    <div class="dim" style="font-size:11px;margin-top:8px;max-width:640px">
+      A device the sniffer has heard regularly (≥5 frames) that then goes quiet for longer than this
+      logs a <b>silence</b> incident — with the channel's energy at that moment — and a <b>recovered</b>
+      incident when it returns. Mains-powered routers should be chatty, so a short window (default 120 s)
+      catches real dropouts; raise it if battery/sleepy end-devices cause false alarms.
+    </div>
+  </div>
+
+  <div class="panel wide" data-tab="config">
     <h2>Firmware update (OTA) <span class="dim" style="font-weight:400;text-transform:none;font-size:11px">⚠ flashes the device over serial — do not unplug during update</span></h2>
     <div class="row" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <input id="ota-file" type="file" accept=".bin">
@@ -461,13 +477,24 @@ async function loadDevices(){const d=await j("/api/devices");if(!d)return;device
 
 async function loadRouting(){const r=await j("/api/routing");if(!r)return;routing=r;
   document.getElementById("r-cnt").textContent=(r.edges||[]).length+" links";renderGraph();}
+function whenStr(ts){if(!ts)return"";const d=new Date(ts*1000);
+  return isNaN(d)?Math.round(ts)+"s":d.toLocaleTimeString();}
 async function loadIncidents(){const i=await j("/api/incidents");if(!i)return;
   document.getElementById("i-cnt").textContent=i.length;
-  document.getElementById("incidents").innerHTML=i.map(x=>
-   `<tr><td class=dim>${Math.round(x.ts)}s</td><td class=mono>${x.addr}</td>`+
-   `<td class="${x.reason==='recovered'?'good':'weak'}">${x.reason}</td><td>${x.channel??""}</td>`+
-   `<td>${x.silent_s!=null?x.silent_s+'s':''}</td></tr>`).join("")||
-   `<tr><td colspan=5 class=dim>no incidents logged</td></tr>`;}
+  document.getElementById("incidents").innerHTML=i.map(x=>{
+   const rc=x.reason==='recovered'?'good':(x.reason==='silence'?'weak':'');
+   const rl=x.reason==='silence'?'went silent':(x.reason==='recovered'?'recovered':x.reason);
+   return `<tr><td class=dim>${whenStr(x.ts)}</td><td>${addrLabel(x.addr)}</td>`+
+   `<td class="${rc}">${rl}</td><td>${x.channel??""}</td>`+
+   `<td>${x.silent_s?x.silent_s+'s':''}</td></tr>`;}).join("")||
+   `<tr><td colspan=5 class=dim>no incidents logged — a device dropping off will show here</td></tr>`;}
+async function loadIncidentCfg(){const c=await j("/api/incident_config");if(!c)return;
+  const el=document.getElementById("cfg-silence");
+  if(el&&document.activeElement!==el)el.value=c.silence_s;}
+on("cfg-silence-save",async()=>{const v=+document.getElementById("cfg-silence").value||120;
+  await post("/api/incident_config?silence="+v);
+  const s=document.getElementById("cfg-silence-stat");s.textContent="saved ✓ (applies within 20s)";
+  setTimeout(()=>{s.textContent="";},2500);});
 let peakByCh={};
 const edValid=v=>v!=null&&v>-120;               // -128/-127 = no-data/err sentinels
 const edHeight=v=>edValid(v)?Math.max(2,Math.min(100,(v+100)*1.6)):3;
@@ -954,7 +981,7 @@ function showTab(t){
     p.style.display=tab?(tab===t?"":"none"):(t==="overview"?"":"none");});
   if(t==="spectrum"){loadSpectrum();loadNetworks();}
   if(t==="active")loadActive();
-  if(t==="config")loadRadios();
+  if(t==="config"){loadRadios();loadIncidentCfg();}
   if(t==="frames")loadFrames();
   if(t==="about")loadAbout();
 }

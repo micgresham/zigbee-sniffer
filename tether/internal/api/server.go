@@ -131,7 +131,11 @@ type Server struct {
 	Reconnect  func()                          // force-reinit the serial link
 	About      map[string]any                  // version/build metadata for the About tab
 	Prefs      func() map[string]string        // current web-UI preferences (from config)
+	Silence    func() int                      // current incident silence threshold (seconds)
 }
+
+// incidentSilenceDefault mirrors the detector's default when unset.
+const incidentSilenceDefault = 120
 
 // writeCSV writes rows as CSV with a stable, sorted column header.
 func writeCSV(w io.Writer, rows []map[string]any) {
@@ -718,6 +722,23 @@ func (s *Server) Handler() http.Handler {
 			s.SaveConfig(func(c *config.Config) { c.Mode = m })
 		}
 		writeJSON(w, map[string]any{"ok": true, "mode": m})
+	})
+	// Incident detector threshold: GET returns the current + default silence
+	// window (seconds); POST ?silence=N persists a new one.
+	mux.HandleFunc("/api/incident_config", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			if n, err := strconv.Atoi(r.URL.Query().Get("silence")); err == nil && n >= 10 && s.SaveConfig != nil {
+				s.SaveConfig(func(c *config.Config) { c.IncidentSilenceS = n })
+			}
+		}
+		cur := 0
+		if s.Silence != nil {
+			cur = s.Silence()
+		}
+		if cur <= 0 {
+			cur = incidentSilenceDefault
+		}
+		writeJSON(w, map[string]any{"silence_s": cur, "default": incidentSilenceDefault})
 	})
 	mux.HandleFunc("/api/hop", func(w http.ResponseWriter, r *http.Request) {
 		dwell, _ := strconv.Atoi(r.URL.Query().Get("dwell"))
