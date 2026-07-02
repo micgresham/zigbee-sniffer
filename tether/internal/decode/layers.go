@@ -115,6 +115,8 @@ type NwkFrame struct {
 	CommandID    int    // NWK command frames only (-1 otherwise)
 	StatusReason string // for "Network Status" command frames
 	StatusDest   int    // for "Network Status": the unreachable destination (-1 if none)
+	SrcExt       uint64 // 64-bit source IEEE address if present in the (plaintext) NWK header, else 0
+	DstExt       uint64 // 64-bit dest IEEE address if present, else 0
 	Payload      []byte
 }
 
@@ -164,10 +166,19 @@ func DecodeNWK(data []byte, networkKey []byte) *NwkFrame {
 	o++
 	n.Seq = int(data[o])
 	o++
+	// These IEEE addresses live in the UNENCRYPTED NWK header, so they're
+	// readable even on foreign networks we can't decrypt — useful for vendor
+	// (OUI) identification.
 	if dstIeee {
+		if o+8 <= len(data) {
+			n.DstExt = binary.LittleEndian.Uint64(data[o:])
+		}
 		o += 8
 	}
 	if srcIeee {
+		if o+8 <= len(data) {
+			n.SrcExt = binary.LittleEndian.Uint64(data[o:])
+		}
 		o += 8
 	}
 	if multicast {

@@ -627,7 +627,24 @@ func (s *Server) Handler() http.Handler {
 	})
 	// Zigbee networks (PAN ids) seen on-air, and which one is ours.
 	mux.HandleFunc("/api/networks", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"networks": nz(s.DB.Networks()), "ours": panHex(s.RT)})
+		nets := nz(s.DB.Networks())
+		ours := panHex(s.RT)
+		// A paired Hue bridge reports its own Zigbee channel. Any FOREIGN network
+		// on that channel is almost certainly the Hue network, so label it even if
+		// we never caught a Hue device's extended address on-air.
+		if s.Hue != nil {
+			if hueCh, ok := s.Hue.Status()["channel"].(int); ok && hueCh > 0 {
+				for _, n := range nets {
+					pan, _ := n["pan"].(string)
+					lbl, _ := n["label"].(string)
+					ch, _ := n["channel"].(int64)
+					if pan != ours && lbl == "" && int(ch) == hueCh {
+						n["label"] = "Philips Hue (bridge)"
+					}
+				}
+			}
+		}
+		writeJSON(w, map[string]any{"networks": nets, "ours": ours})
 	})
 	// Full-band survey: hop every channel briefly to discover networks on all of
 	// them (single radio → pauses capture). Progress goes out on the WebSocket.

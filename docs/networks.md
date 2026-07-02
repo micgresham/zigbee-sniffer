@@ -28,12 +28,22 @@ each PAN it sees in the `pans` table (`store/db.go`) — for normal traffic that
 Foreign PANs start as bare hex ids, but the host puts a name to them:
 
 - **By manufacturer (OUI), no setup.** Every extended (IEEE) address begins with a 24-bit OUI that
-  identifies the vendor. When the sniffer hears an extended address on a PAN, it labels that network
-  — **Philips Hue** (`00:17:88`), **Aqara/Xiaomi**, **IKEA/Silicon Labs**, **Texas Instruments**, … —
-  automatically. Table: [`tether/internal/names/oui.go`](../tether/internal/names/oui.go).
-- **By integration.** Pairing a **Philips Hue bridge** (Config → Philips Hue bridge) adds real
-  *device* names on top, and confirms the Hue network's channel. See
-  [ha-integration.md](ha-integration.md). Home Assistant/ZHA names your own network the same way.
+  identifies the vendor. The sniffer picks up extended addresses from the MAC header *and* from the
+  **unencrypted NWK header's source/dest IEEE fields** (so it works even on foreign networks it
+  can't decrypt), and labels that PAN — **Philips Hue** (`00:17:88`), **Aqara/Xiaomi**,
+  **IKEA/Silicon Labs**, **Texas Instruments**, … — automatically. A network with few frames may
+  stay unlabeled until one of its frames carries an IEEE address. Table:
+  [`tether/internal/names/oui.go`](../tether/internal/names/oui.go).
+- **By integration.** Pairing a **Philips Hue bridge** (Config → Philips Hue bridge) reports the
+  bridge's Zigbee **channel**, so a foreign network on that channel is labeled **"Philips Hue
+  (bridge)"** even if no Hue device's address was caught. See [ha-integration.md](ha-integration.md).
+  Home Assistant/ZHA names your own network the same way.
+
+> **Single-radio caveat for Hue *device* names:** a Hue bridge usually runs on a *different channel*
+> than your ZHA network. With one radio pinned to your channel you can identify the Hue *network*
+> (above) but won't hear individual Hue devices, so their names won't appear in Devices. To name Hue
+> devices, capture on the Hue channel (Overview → Channel) or add a [satellite radio](multi-radio.md)
+> there.
 
 A **foreign PAN on your channel** is the one to worry about — it's another network
 contending for the same airtime. Foreign PANs are also raised in

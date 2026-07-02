@@ -39,9 +39,11 @@ same time** — both feed one registry.
   round link button on the bridge, then click **Pair**. The host creates an application key via the
   bridge's `POST /api` and stores it **encrypted at rest** (`hue_key` in `zbsniff.yaml`, like the HA
   token). Endpoints: `POST /api/hue_pair?host=`, `GET /api/hue_status`, `POST /api/hue_forget`.
-- **What it names:** Hue devices the sniffer actually hears on-air (by their MAC), and — with the
-  OUI identity below — the **Hue network itself** in the *Zigbee networks* panel ("Philips Hue,
-  ch 15"). The sniffer only hears the Hue network if it's on your capture channel or during a survey.
+- **What it names:** the **Hue network itself** — the bridge reports its Zigbee channel, so a
+  foreign network on that channel is labeled "Philips Hue (bridge)" in the *Zigbee networks* panel
+  regardless of what we've heard. Individual **Hue device** names only appear when the sniffer
+  actually hears those devices, which needs capture on the Hue channel (a Hue bridge is usually on a
+  *different* channel than your ZHA network, and one radio hears one channel).
 - Implementation: [`tether/internal/names/hue.go`](../tether/internal/names/hue.go).
 
 ## Network identity by manufacturer (OUI) — no setup
