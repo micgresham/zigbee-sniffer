@@ -41,9 +41,25 @@ Foreign PANs start as bare hex ids, but the host puts a name to them:
 
 > **Single-radio caveat for Hue *device* names:** a Hue bridge usually runs on a *different channel*
 > than your ZHA network. With one radio pinned to your channel you can identify the Hue *network*
-> (above) but won't hear individual Hue devices, so their names won't appear in Devices. To name Hue
-> devices, capture on the Hue channel (Overview → Channel) or add a [satellite radio](multi-radio.md)
-> there.
+> (above) but won't hear individual Hue devices, so their names won't appear in Devices. Use
+> **Monitor** (below) to snapshot that channel and pick them up.
+
+## Monitoring a foreign network (Hue-prioritised)
+
+The **Monitor** button (and the per-row *monitor* link) on the Zigbee-networks panel watches another
+network so its devices get discovered and named. It picks the target channel automatically —
+**the paired Hue bridge's channel first**, else the busiest foreign network — and adapts to your
+hardware (`POST /api/monitor`):
+
+- **Spare/satellite radio available** → that radio is dedicated to the foreign channel *continuously*
+  (a `monitor:<ch>` role, pinned + capturing), while your primary keeps watching your network. This
+  is the right way to watch another network long-term; see [multi-radio.md](multi-radio.md).
+- **Single radio** → a timed **snapshot**: the radio pins to the target channel for ~20 s (collecting
+  that network's devices and names — e.g. Hue device names via the bridge), then restores your
+  channel and hop state.
+
+Because a Hue network is encrypted, individual Hue *device* names come from matching the addresses
+heard on-air to the bridge's device list (by IEEE/OUI); routers and chatty devices resolve first.
 
 A **foreign PAN on your channel** is the one to worry about — it's another network
 contending for the same airtime. Foreign PANs are also raised in

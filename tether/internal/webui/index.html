@@ -330,6 +330,7 @@ border-left:1px solid var(--line);transform:translateX(100%);transition:.2s;z-in
       <span style="float:right">
         <button id="nw-survey" title="Hop every channel and listen for existing traffic (passive)">Passive survey</button>
         <button id="nw-active" title="Hop every channel and transmit a beacon request so even idle networks announce themselves">Active scan ⚡</button>
+        <button id="nw-monitor" title="Watch a foreign network (Hue first): a spare/satellite radio if available, else a timed snapshot on this radio">Monitor Hue/foreign</button>
       </span></h2>
     <div class="dim" style="font-size:11px;margin-bottom:8px">
       Your capture shows networks on <b>your channel</b> only. A survey hops every channel (11–26) to find networks elsewhere — on a single radio this briefly pauses capture (~30 s).
@@ -439,7 +440,10 @@ function ws(){const p=location.protocol==="https:"?"wss:":"ws:";
     else if(m.kind==="ota")otaProgress(m);
     else if(m.kind==="survey"){const p=document.getElementById("nw-prog"),k=m.active?"active scan":"survey";
       if(m.done){p.textContent=k+" complete — restored channel "+(m.channel||"");loadNetworks();}
-      else{p.textContent=(m.active?"beaconing":"listening on")+" channel "+m.channel+"…";loadNetworks();}};}}
+      else{p.textContent=(m.active?"beaconing":"listening on")+" channel "+m.channel+"…";loadNetworks();}}
+    else if(m.kind==="monitor"){const p=document.getElementById("nw-prog");
+      if(m.done){p.textContent="snapshot complete — restored channel "+(m.channel||"");loadDevices();loadNetworks();}
+      else{p.textContent="monitoring channel "+m.channel+"… (collecting that network's devices)";}};}}
 const otaStates=["idle","receiving","writing","verifying","complete — rebooting","error"];
 function otaProgress(m){const box=document.getElementById("ota-prog");if(!box)return;box.style.display="block";
   const pct=m.total?Math.round(m.received/m.total*100):0,bar=document.getElementById("ota-bar");
@@ -860,11 +864,20 @@ async function loadNetworks(){const r=await j("/api/networks");if(!r)return;
   document.getElementById("nw-tbl").innerHTML=nw.map(n=>{
     const mine=n.pan.toLowerCase()===ours;
     const who=mine?'your Zigbee network':(n.label?`<b>${n.label}</b>`:'<span class=dim>neighbouring network</span>');
+    const mon=(!mine&&n.channel)?` <a href="#" class="nw-mon" data-ch="${n.channel}" style="font-size:11px;margin-left:6px">monitor</a>`:"";
     return `<tr><td class=mono>${n.pan}${mine?' <span class="tag coord">yours</span>':' <span class="tag">foreign</span>'}</td>`+
       `<td>${n.channel||"–"}</td><td>${n.count}</td>`+
       `<td class=dim>${n.last_seen?ageStr(n.last_seen):""}</td>`+
-      `<td>${who}</td></tr>`;
-  }).join("")||'<tr><td colspan=5 class=dim>no networks seen yet — capture, or run a survey</td></tr>';}
+      `<td>${who}${mon}</td></tr>`;
+  }).join("")||'<tr><td colspan=5 class=dim>no networks seen yet — capture, or run a survey</td></tr>';
+  document.querySelectorAll(".nw-mon").forEach(a=>a.onclick=e=>{e.preventDefault();monitorNet(+a.dataset.ch);});}
+async function monitorNet(ch){
+  const r=await fetch("/api/monitor"+(ch?"?channel="+ch:""),{method:"POST"}).then(x=>x.json()).catch(()=>null);
+  const p=document.getElementById("nw-prog");
+  if(!r||!r.ok){p.textContent="⚠ "+((r&&r.reason)||"could not start monitoring");return;}
+  if(r.mode==="radio")p.textContent=`radio ${r.radio} now monitoring channel ${r.channel} (${r.source}) — its devices will appear as they're heard`;
+  else p.textContent=`snapshotting channel ${r.channel} (${r.source}) for ${(r.dwell_ms/1000)|0}s — capture pauses briefly`;
+  loadNetworks();}
 async function startSurvey(active){if(!await gateFn("spectrum"))return;
   const what=active?"Active scan transmits a beacon request on each of the 16 Zigbee channels (~30 s) so even idle networks reply. It TX's on-air (a standard scan) and needs firmware ≥ 0.26."
                    :"Passive survey hops all 16 Zigbee channels (~30 s) listening for networks on other channels.";
@@ -873,6 +886,7 @@ async function startSurvey(active){if(!await gateFn("spectrum"))return;
   post("/api/survey"+(active?"?active=1":""));}
 on("nw-survey",()=>startSurvey(false));
 on("nw-active",()=>startSurvey(true));
+on("nw-monitor",()=>monitorNet(0)); // 0 → auto: Hue channel first, else busiest foreign
 on("c-savekey",()=>post("/api/save_key"));
 on("cfg-silence-save",async()=>{const v=+document.getElementById("cfg-silence").value||120;
   await post("/api/incident_config?silence="+v);

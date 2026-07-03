@@ -299,6 +299,18 @@ func DecodeAPS(data []byte) *ApsFrame {
 	return a
 }
 
+// ZDODeviceAnnounce extracts (nwkAddr, ieeeAddr) from a ZDO Device_annce
+// (profile 0x0000, cluster 0x0013), an authoritative short<->IEEE mapping a
+// device broadcasts when it (re)joins. Only present on a decrypted frame.
+// Payload: seq(1) nwkAddr(2 LE) ieee(8 LE) capability(1).
+func ZDODeviceAnnounce(a *ApsFrame) (nwk uint16, ext uint64, ok bool) {
+	if a == nil || a.Profile != 0x0000 || a.Cluster != 0x0013 || len(a.Payload) < 11 {
+		return 0, 0, false
+	}
+	p := a.Payload
+	return uint16(p[1]) | uint16(p[2])<<8, binary.LittleEndian.Uint64(p[3:11]), true
+}
+
 var zclGlobalCmds = map[byte]string{
 	0x00: "Read Attributes", 0x01: "Read Attributes Response",
 	0x02: "Write Attributes", 0x0A: "Report Attributes", 0x0B: "Default Response",

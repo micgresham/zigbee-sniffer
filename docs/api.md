@@ -28,6 +28,7 @@ binary command frames (`set_channel`, `set_mode`, `ed_scan`, `set_key`).
 | GET | `/api/spectrum?from=&to=` | ED time-series for the waterfall + channel advice |
 | GET | `/api/networks` | every PAN id seen on-air (`networks[]`: `pan`, `channel`, `count`, `last_seen`) plus `ours` (your PAN) — see [networks.md](networks.md) |
 | POST | `/api/survey?active=&dwell=` | run a whole-band survey: hop channels 11–26 collecting PANs. `active=1` also TX's a beacon request per channel (needs firmware ≥ 0.26); `dwell` = ms/channel. Progress streams on `/ws` as `{"kind":"survey",...}` |
+| POST | `/api/monitor?channel=&dwell=` | watch a foreign network: default channel = paired Hue bridge, else busiest foreign PAN. Uses a spare/satellite radio continuously (`monitor:<ch>` role) if available, else a timed snapshot on the primary (`{"kind":"monitor",...}` on `/ws`) |
 | GET | `/api/incidents` | incident list (silence/recovery, newest first) — see [incidents.md](incidents.md) |
 | GET/POST | `/api/incident_config?silence=N` | get/set the silence threshold (seconds) the host detector uses |
 | GET | `/api/incidents/{id}` | incident detail + context + pcap slice link |

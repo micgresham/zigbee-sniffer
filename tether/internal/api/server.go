@@ -52,6 +52,22 @@ func statusChannel(rt *runtime.Runtime) int {
 	return 0
 }
 
+// statusHopDwell reads the device's current hop dwell (ms) from the latest status.
+func statusHopDwell(rt *runtime.Runtime) int {
+	if rt == nil {
+		return 0
+	}
+	switch n := rt.Status()["hop_dwell_ms"].(type) {
+	case int:
+		return n
+	case uint16:
+		return int(n)
+	case float64:
+		return int(n)
+	}
+	return 0
+}
+
 // panHex renders the runtime PAN id as "0x1234" (or "" if unknown).
 func panHex(rt *runtime.Runtime) string {
 	if rt == nil || rt.Pan() == 0 {
@@ -320,6 +336,68 @@ func (s *Server) runSurvey(port string, dwellMs int, active bool) {
 			proto.CmdStartMsg())
 	}
 	s.Hub.Publish(map[string]any{"kind": "survey", "channel": orig, "active": active, "done": true})
+}
+
+// runMonitorSnapshot dwells the given radio on a foreign channel for a while
+// (collecting that network's devices/names), then restores the capture channel.
+// Used on a single radio when no spare is available to monitor continuously.
+func (s *Server) runMonitorSnapshot(port string, ch, dwellMs int) {
+	orig := statusChannel(s.RT)
+	origHop := statusHopDwell(s.RT)
+	// Pin to the target channel (hop off) for a clean capture during the dwell,
+	// regardless of whether the radio was hopping.
+	s.sendFnTo(port, proto.CmdSetHopMsg(proto.AllChannelsMask(), 0),
+		proto.CmdSetChannelMsg(byte(ch)), proto.CmdSetModeMsg(proto.ModeCapture), proto.CmdStartMsg())
+	s.Hub.Publish(map[string]any{"kind": "monitor", "channel": ch, "done": false})
+	time.Sleep(time.Duration(dwellMs) * time.Millisecond)
+	// Restore the original channel and hop state.
+	frames := [][]byte{}
+	if origHop > 0 {
+		frames = append(frames, proto.CmdSetHopMsg(proto.AllChannelsMask(), uint16(origHop)))
+	}
+	if orig >= int(proto.ChannelMin) && orig <= int(proto.ChannelMax) {
+		frames = append(frames, proto.CmdSetChannelMsg(byte(orig)))
+	}
+	frames = append(frames, proto.CmdSetModeMsg(proto.ModeCapture), proto.CmdStartMsg())
+	s.sendFnTo(port, frames...)
+	s.Hub.Publish(map[string]any{"kind": "monitor", "channel": orig, "done": true})
+}
+
+// hueChannel returns the paired Hue bridge's Zigbee channel, or 0.
+func (s *Server) hueChannel() int {
+	if s.Hue == nil {
+		return 0
+	}
+	if ch, ok := s.Hue.Status()["channel"].(int); ok {
+		return ch
+	}
+	return 0
+}
+
+// spareRadio picks a radio that can monitor a foreign channel without disrupting
+// the primary capture: prefer an idle/unassigned radio or a satellite (radio-id
+// != 0), never the active sniffer. Returns ok=false if only the primary exists.
+func (s *Server) spareRadio() (port string, radioID int, ok bool) {
+	if s.Radios == nil {
+		return "", 0, false
+	}
+	roles := map[int]string{}
+	if s.Roles != nil {
+		roles = s.Roles()
+	}
+	list := s.Radios.List()
+	for _, r := range list {
+		role := roles[r.RadioID]
+		if role == "sniffer" || role == "tester" || role == "hopper" {
+			continue // busy on your network
+		}
+		if r.RadioID != 0 || role == "idle" || role == "" || strings.HasPrefix(role, "monitor") {
+			if len(list) > 1 || r.RadioID != 0 { // need a genuine spare
+				return r.Port, r.RadioID, true
+			}
+		}
+	}
+	return "", 0, false
 }
 
 // cmd sends one or more framed command messages to the device(s).
@@ -665,6 +743,51 @@ func (s *Server) Handler() http.Handler {
 		active := r.URL.Query().Get("active") == "1"
 		go s.runSurvey(port, dwell, active)
 		writeJSON(w, map[string]any{"ok": true})
+	})
+	// Monitor a foreign network. Target channel = ?channel=, else the paired Hue
+	// bridge's channel (prioritised), else the busiest foreign network. If a spare
+	// (satellite) radio is available it's dedicated to that channel continuously;
+	// otherwise the primary takes a timed snapshot there and returns.
+	mux.HandleFunc("/api/monitor", func(w http.ResponseWriter, r *http.Request) {
+		ch, _ := strconv.Atoi(r.URL.Query().Get("channel"))
+		source := "requested"
+		if ch == 0 {
+			if hc := s.hueChannel(); hc > 0 {
+				ch, source = hc, "Hue bridge"
+			}
+		}
+		if ch == 0 { // busiest foreign network
+			ours := panHex(s.RT)
+			for _, n := range s.DB.Networks() {
+				pan, _ := n["pan"].(string)
+				c, _ := n["channel"].(int64)
+				if pan != ours && c >= int64(proto.ChannelMin) && c <= int64(proto.ChannelMax) {
+					ch, source = int(c), "foreign network "+pan
+					break
+				}
+			}
+		}
+		if ch < int(proto.ChannelMin) || ch > int(proto.ChannelMax) {
+			writeJSON(w, map[string]any{"ok": false, "reason": "no Hue bridge or foreign network to monitor yet — run a survey first"})
+			return
+		}
+		if port, id, ok := s.spareRadio(); ok && s.SetRole != nil {
+			_ = port
+			s.SetRole(id, fmt.Sprintf("monitor:%d", ch))
+			writeJSON(w, map[string]any{"ok": true, "mode": "radio", "radio": id, "channel": ch, "source": source})
+			return
+		}
+		port, _, ok, _, reason := s.allocate("capture")
+		if !ok {
+			writeJSON(w, map[string]any{"ok": false, "reason": reason})
+			return
+		}
+		dwell := 20000
+		if d, err := strconv.Atoi(r.URL.Query().Get("dwell")); err == nil && d >= 2000 {
+			dwell = d
+		}
+		go s.runMonitorSnapshot(port, ch, dwell)
+		writeJSON(w, map[string]any{"ok": true, "mode": "snapshot", "channel": ch, "source": source, "dwell_ms": dwell})
 	})
 	mux.HandleFunc("/api/set_channel", func(w http.ResponseWriter, r *http.Request) {
 		ch, _ := strconv.Atoi(r.URL.Query().Get("ch"))
