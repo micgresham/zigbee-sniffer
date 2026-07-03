@@ -784,6 +784,14 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, map[string]any{"addr": fmt.Sprintf("0x%04x", short), "have": has, "info": info,
 			"clusters": clusterNames})
 	})
+	// Re-interview: force a fresh pull of device capabilities from the coordinator
+	// (ZHA) — no on-air transmitting.
+	mux.HandleFunc("/api/reinterview", func(w http.ResponseWriter, r *http.Request) {
+		if s.HA != nil {
+			s.HA.Refresh()
+		}
+		writeJSON(w, map[string]any{"ok": s.HA != nil})
+	})
 	// Traceroute: the path from the coordinator to a device, with per-hop LQI.
 	mux.HandleFunc("/api/traceroute", func(w http.ResponseWriter, r *http.Request) {
 		short, ok := parseShortAddr(r.URL.Query().Get("addr"))

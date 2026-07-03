@@ -133,6 +133,7 @@ border-left:1px solid var(--line);transform:translateX(100%);transition:.2s;z-in
   <h1>Zigbee <span>Sniffer</span> · Tethered</h1>
   <span id="conn" class="bad">host: disconnected</span>
   <span id="cap-ind-hdr" class="capind idle">■ idle</span>
+  <span id="hop-warn" style="display:none;background:#7a4a00;color:#ffd591;padding:4px 12px;border-radius:14px;font-size:12px;font-weight:600;cursor:pointer" title="The radio is hopping across channels, so your network is only captured part of the time. Click to pin it.">⚠ channel-hopping</span>
   <div class="metrics">
     <span>ch <b id="m-ch">—</b></span>
     <span>captured <b id="m-cap">0</b></span>
@@ -842,7 +843,7 @@ async function showDetail(addr){if(!addr||addr==="—")return;selected=addr;
    `<div>Raw sniffer LQI</div><div class=dim>${dev.last_lqi??'?'} <span class=dim>(C6 LQI reads low — prefer RSSI/quality)</span></div>`+
    `<div>Frames seen</div><div>${dev.count??0}</div>`+
    `<div>Channel</div><div>${dev.last_channel??'?'}</div></div>`+
-   `<h2 style="font-size:12px;color:var(--dim);text-transform:uppercase;margin-top:14px">Capabilities <span class=dim style="text-transform:none;font-weight:400">(from coordinator / ZHA)</span></h2>`+
+   `<h2 style="font-size:12px;color:var(--dim);text-transform:uppercase;margin-top:14px;display:flex;justify-content:space-between;align-items:center">Capabilities <button id="d-reint" style="font-size:11px;padding:2px 8px" title="re-pull this device's endpoints/clusters from the coordinator (ZHA)">Re-interview</button></h2>`+
    capsHtml(di)+
    `<h2 style="font-size:12px;color:var(--dim);text-transform:uppercase;margin-top:14px;display:flex;justify-content:space-between;align-items:center">Path from coordinator <button id="d-trace" style="font-size:11px;padding:2px 8px">Trace</button></h2>`+
    `<div id="d-trace-out" class=dim style="font-size:11px">click <b>Trace</b> to plot the route from the coordinator to this device.</div>`+
@@ -859,6 +860,9 @@ async function showDetail(addr){if(!addr||addr==="—")return;selected=addr;
   if(pb)pb.onclick=async()=>{const p=document.getElementById("at-radio")?document.getElementById("at-radio").value:"";
     if(!p&&!await gateFn("probe"))return;
     post(`/api/probe?addr=${addr}${p?'&port='+encodeURIComponent(p):''}`).then(()=>setTimeout(()=>showDetail(addr),700));};
+  const rb=document.getElementById("d-reint");
+  if(rb)rb.onclick=async()=>{rb.textContent="re-interviewing…";await post("/api/reinterview");
+    setTimeout(()=>showDetail(addr),1500);};
   const tb=document.getElementById("d-trace");
   if(tb)tb.onclick=async()=>{const out=document.getElementById("d-trace-out");out.textContent="tracing…";
     const t=await j(`/api/traceroute?addr=${addr}`);
@@ -882,6 +886,8 @@ function render(){setConn();
 let capPrev=-1,capActiveTs=0,capStopped=false;
 function updateCapInd(){
   const s=status||{},mode=s.mode_id,cap=s.captured??0;
+  const hw=document.getElementById("hop-warn");
+  if(hw)hw.style.display=(s.hop_dwell_ms>0)?"inline-block":"none";
   if(capPrev>=0&&cap>capPrev){capActiveTs=Date.now();capStopped=false;}
   capPrev=cap;
   const active=Date.now()-capActiveTs<4000;
@@ -914,6 +920,7 @@ const on=(id,fn)=>document.getElementById(id).onclick=fn;
 const savePref=(k,v)=>fetch(`/api/prefs?key=${encodeURIComponent(k)}&value=${encodeURIComponent(v)}`,{method:"POST"});
 on("c-start",async()=>{if(!await gateFn("capture"))return;capStopped=false;post("/api/start");});
 on("c-stop",()=>{capStopped=true;updateCapInd();post("/api/stop");});
+document.getElementById("hop-warn").onclick=()=>{if(confirm("Pin the radio to your channel (stop hopping)? Hopping only captures your network part of the time."))post("/api/hop?dwell=0");};
 on("c-restart",async()=>{if(!await gateFn("capture"))return;capStopped=false;post("/api/start");});
 on("c-reset",()=>post("/api/reset_radio"));
 on("c-scan",async()=>{if(!await gateFn("spectrum"))return;post("/api/scan");});

@@ -214,15 +214,27 @@ func parseNWK(raw json.RawMessage) (uint16, bool) {
 
 // HAManager owns the (re)connectable HA link and exposes status to the API.
 type HAManager struct {
-	reg    *Registry
-	mu     sync.Mutex
-	cancel context.CancelFunc
-	status map[string]any
+	reg     *Registry
+	mu      sync.Mutex
+	cancel  context.CancelFunc
+	status  map[string]any
+	refresh chan struct{}
 }
 
 // NewHAManager creates a manager bound to a name registry.
 func NewHAManager(reg *Registry) *HAManager {
-	return &HAManager{reg: reg, status: map[string]any{"connected": false}}
+	return &HAManager{reg: reg, status: map[string]any{"connected": false},
+		refresh: make(chan struct{}, 1)}
+}
+
+// Refresh triggers an immediate re-fetch from the coordinator (ZHA), refreshing
+// device capabilities/neighbours — an on-demand "re-interview" that uses HA's own
+// data (no on-air transmitting).
+func (m *HAManager) Refresh() {
+	select {
+	case m.refresh <- struct{}{}:
+	default:
+	}
 }
 
 func (m *HAManager) set(s map[string]any) { m.mu.Lock(); m.status = s; m.mu.Unlock() }
@@ -259,6 +271,7 @@ func (m *HAManager) Connect(url, token string) {
 			select {
 			case <-ctx.Done():
 				return
+			case <-m.refresh: // manual re-interview → re-fetch now
 			case <-time.After(30 * time.Second):
 			}
 		}

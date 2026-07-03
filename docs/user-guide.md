@@ -90,8 +90,12 @@ Your home base — three panels:
 
 **Device details** (click a device). Beyond signal/messages, the drawer shows **Capabilities**
 (endpoints + in/out clusters, manufacturer, model, power — pulled from the coordinator/ZHA, no
-on-air interrogation) and a **Path from coordinator** button that plots the route to the device
-hop-by-hop with per-hop LQI (from ZHA's neighbour table, or the sniffer's observed links).
+on-air interrogation; **Re-interview** re-pulls it on demand) and a **Path from coordinator**
+button that plots the route to the device hop-by-hop with per-hop LQI (from ZHA's neighbour table,
+or the sniffer's observed links).
+
+A **⚠ channel-hopping** badge appears in the top bar whenever the radio is hopping (which only
+captures your network part of the time) — click it to pin back to your channel.
 
 **Incidents.** Timestamped dropout events the host flags automatically: a device that was
 heard regularly then **went silent** past the threshold (with the channel's energy at that
