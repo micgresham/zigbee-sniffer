@@ -75,8 +75,9 @@ func Open(path string) (*DB, error) {
 	if _, err := d.Exec(schema); err != nil {
 		return nil, err
 	}
-	// Migrate older DBs that predate the pans.label column (ignore "duplicate").
+	// Migrate older DBs (ignore "duplicate column" errors).
 	d.Exec(`ALTER TABLE pans ADD COLUMN label TEXT`)
+	d.Exec(`ALTER TABLE devices ADD COLUMN pan INTEGER`) // which network the device is on
 	// One-time trim: an existing DB may already hold millions of ed_samples from
 	// before the cap existed. Bring it back under edCap so queries are fast now.
 	d.Exec(`DELETE FROM ed_samples WHERE rowid <= (SELECT MAX(rowid) - ? FROM ed_samples)`, edCap)
@@ -125,9 +126,13 @@ func (d *DB) IngestFrame(ts float64, radio, channel int, rssi, lqi int, dec *dec
 			seenPan, ts, channel, ts, channel)
 	}
 
+	panInt := -1
+	if seenPan >= 0 && seenPan != 0xFFFF {
+		panInt = int(seenPan)
+	}
 	// MAC-layer addresses are the physical hop (often router<->coordinator).
 	if src >= 0 && src != broadcast {
-		d.upsertDevice(int(src), ts, rssi, lqi, channel)
+		d.upsertDevice(int(src), ts, rssi, lqi, channel, panInt)
 	}
 	if src >= 0 && dst >= 0 && dst != broadcast {
 		d.upsertLink(int(src), int(dst), lqi, rssi, ts)
@@ -139,7 +144,7 @@ func (d *DB) IngestFrame(ts float64, radio, channel int, rssi, lqi int, dec *dec
 	if dec.NWK != nil {
 		ns, nd := dec.NWK.Src, dec.NWK.Dst
 		if ns >= 0 && ns < 0xFFF8 {
-			d.upsertDevice(ns, ts, rssi, lqi, channel)
+			d.upsertDevice(ns, ts, rssi, lqi, channel, panInt)
 		}
 		if ns >= 0 && ns < 0xFFF8 && nd >= 0 && nd < 0xFFF8 && ns != nd {
 			d.upsertLink(ns, nd, lqi, rssi, ts)
@@ -153,20 +158,68 @@ func (d *DB) upsertLink(src, dst, lqi, rssi int, ts float64) {
 		src, dst, lqi, rssi, ts, lqi, rssi, ts)
 }
 
-func (d *DB) upsertDevice(addr int, ts float64, rssi, lqi, channel int) {
+func (d *DB) upsertDevice(addr int, ts float64, rssi, lqi, channel, pan int) {
 	var cnt int
 	err := d.db.QueryRow(`SELECT count FROM devices WHERE addr=?`, addr).Scan(&cnt)
 	role := any(nil)
 	if addr == 0 {
 		role = "coordinator"
 	}
-	if err == sql.ErrNoRows {
-		d.db.Exec(`INSERT INTO devices(addr,role,first_seen,last_seen,count,last_rssi,last_lqi,last_channel)
-		           VALUES(?,?,?,?,1,?,?,?)`, addr, role, ts, ts, rssi, lqi, channel)
-	} else {
-		d.db.Exec(`UPDATE devices SET last_seen=?,count=count+1,last_rssi=?,last_lqi=?,last_channel=? WHERE addr=?`,
-			ts, rssi, lqi, channel, addr)
+	var panN any
+	if pan >= 0 {
+		panN = pan
 	}
+	if err == sql.ErrNoRows {
+		d.db.Exec(`INSERT INTO devices(addr,role,first_seen,last_seen,count,last_rssi,last_lqi,last_channel,pan)
+		           VALUES(?,?,?,?,1,?,?,?,?)`, addr, role, ts, ts, rssi, lqi, channel, panN)
+	} else {
+		// First PAN seen sticks (COALESCE(pan,?)) — stable, and avoids flip-flop
+		// from short-address collisions across networks (every net has a 0x0000).
+		d.db.Exec(`UPDATE devices SET last_seen=?,count=count+1,last_rssi=?,last_lqi=?,last_channel=?,pan=COALESCE(pan,?) WHERE addr=?`,
+			ts, rssi, lqi, channel, panN, addr)
+	}
+}
+
+// SetDeviceExt persists a device's extended (IEEE) address so its name/vendor
+// survive restarts (the short<->IEEE map is otherwise learned on-air each run).
+func (d *DB) SetDeviceExt(addr int, ext uint64) {
+	if ext == 0 {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.db.Exec(`UPDATE devices SET ext=? WHERE addr=?`, int64(ext), addr)
+}
+
+// SetDeviceName persists a resolved device name (e.g. from a paired Hue bridge)
+// so it survives restarts. Only fills an empty name — a live HA/ZHA name is
+// resolved at read time and shouldn't be shadowed by a stored one.
+func (d *DB) SetDeviceName(addr int, name string) {
+	if name == "" {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.db.Exec(`UPDATE devices SET name=? WHERE addr=? AND (name IS NULL OR name='')`, name, addr)
+}
+
+// DeviceExts returns every persisted short->IEEE mapping, to reseed the name
+// registry on startup.
+func (d *DB) DeviceExts() map[int]uint64 {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := map[int]uint64{}
+	rows, _ := d.db.Query(`SELECT addr,ext FROM devices WHERE ext IS NOT NULL AND ext!=0`)
+	if rows != nil {
+		defer rows.Close()
+		for rows.Next() {
+			var addr int
+			var ext int64
+			rows.Scan(&addr, &ext)
+			out[addr] = uint64(ext)
+		}
+	}
+	return out
 }
 
 // IngestED stores an energy-detect sample, pruning old rows periodically so the
@@ -301,7 +354,7 @@ func (d *DB) DetectIncidents(thresholdS int, now float64) []map[string]any {
 func (d *DB) Devices() []map[string]any {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	rows, err := d.db.Query(`SELECT addr,role,name,last_seen,count,last_rssi,last_lqi,last_channel
+	rows, err := d.db.Query(`SELECT addr,role,name,last_seen,count,last_rssi,last_lqi,last_channel,pan
 	                         FROM devices ORDER BY last_seen DESC`)
 	if err != nil {
 		return nil
@@ -312,13 +365,17 @@ func (d *DB) Devices() []map[string]any {
 		var addr int64
 		var role, name sql.NullString
 		var lastSeen sql.NullFloat64
-		var count, rssi, lqi, ch sql.NullInt64
-		rows.Scan(&addr, &role, &name, &lastSeen, &count, &rssi, &lqi, &ch)
-		out = append(out, map[string]any{
+		var count, rssi, lqi, ch, pan sql.NullInt64
+		rows.Scan(&addr, &role, &name, &lastSeen, &count, &rssi, &lqi, &ch, &pan)
+		m := map[string]any{
 			"addr": fmt.Sprintf("0x%04x", uint16(addr)), "role": role.String, "name": name.String,
 			"count": count.Int64, "last_rssi": rssi.Int64, "last_lqi": lqi.Int64,
 			"last_channel": ch.Int64,
-		})
+		}
+		if pan.Valid {
+			m["pan"] = fmt.Sprintf("0x%04x", uint16(pan.Int64))
+		}
+		out = append(out, m)
 	}
 	return out
 }
@@ -489,19 +546,17 @@ func (d *DB) Diagnostics(ourPan int) []map[string]any {
 	return out
 }
 
-// LabelPan tags a PAN with a vendor/name label (e.g. "Philips Hue"), learned
-// from an extended address seen on that network. A friendly name (from an
-// integration) upgrades over a bare OUI vendor; we don't downgrade.
+// LabelPan tags a PAN with a manufacturer label (e.g. "Philips Hue") derived
+// from an OUI seen on that network. Last writer wins so a network with mixed
+// silicon settles on the most-recently-seen vendor; the authoritative Hue label
+// is applied at read time by the API from the paired bridge's channel.
 func (d *DB) LabelPan(pan int, label string) {
 	if label == "" || pan < 0 || pan == 0xFFFF {
 		return
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	// Set when empty; otherwise only overwrite if the new label is "richer"
-	// (longer usually means a device name vs a vendor). Cheap heuristic.
-	d.db.Exec(`UPDATE pans SET label=? WHERE pan=? AND (label IS NULL OR label='' OR length(?)>length(label))`,
-		label, pan, label)
+	d.db.Exec(`UPDATE pans SET label=? WHERE pan=?`, label, pan)
 }
 
 // Networks returns every PAN id seen on-air (yours + foreign), busiest first.

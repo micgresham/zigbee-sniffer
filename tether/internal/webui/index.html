@@ -271,6 +271,7 @@ border-left:1px solid var(--line);transform:translateX(100%);transition:.2s;z-in
     <h2><span>Routing tree → coordinator <span class="cnt" id="r-cnt">0 links</span></span>
       <span style="display:flex;gap:6px">
         <button id="rg-leaves" class="on" style="font-size:11px;padding:2px 8px">End devices</button>
+        <button id="rg-foreign" class="on" style="font-size:11px;padding:2px 8px" title="show devices on other networks (e.g. Hue), coloured purple with /FGN:&lt;channel&gt;">Foreign</button>
         <button id="rg-reset" style="font-size:11px;padding:2px 8px">Reset view</button>
       </span></h2>
     <div class="row" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:6px;font-size:12px">
@@ -285,6 +286,7 @@ border-left:1px solid var(--line);transform:translateX(100%);transition:.2s;z-in
       <span><i style="background:var(--good)"></i>strong ⌖</span>
       <span><i style="background:var(--fair)"></i>fair ⌖</span>
       <span><i style="background:var(--weak)"></i>weak / isolated</span>
+      <span><i style="background:#bc8cff"></i>foreign network (/FGN:ch)</span>
       <span>— — parent not yet observed</span>
     </div>
     <div class="dim" style="font-size:10px;margin-top:2px">Edge colour = link quality <b>as heard by the sniffer</b> (one vantage point), not the device's own link. Scroll to zoom · drag empty space to pan · <b>drag a node to pull it out</b> (Reset view releases pinned nodes).</div>
@@ -481,7 +483,8 @@ async function loadDevices(){const d=await j("/api/devices");if(!d)return;device
    const net=x.net_lqi!=null?`<span class="${lqiClass(x.net_lqi)}">${x.net_lqi}</span>`:'<span class=dim title="connect Home Assistant to see the network\'s view">—</span>';
    const netr=x.net_rssi!=null?`${x.net_rssi}`:'<span class=dim>—</span>';
    const nm=x.name?x.name:(x.mfg?`<span class=dim style="font-style:italic" title="identified by manufacturer (OUI) — no device name available">${x.mfg}</span>`:"");
-   return `<tr class=click data-addr="${x.addr}"><td class=mono>${x.addr}</td><td>${nm}</td><td>${role}</td>`+
+   const ftag=x.foreign?` <span class="tag" title="on another network (PAN ${x.pan||"?"}) — not your Zigbee network">foreign</span>`:"";
+   return `<tr class=click data-addr="${x.addr}"><td class=mono>${x.addr}</td><td>${nm}${ftag}</td><td>${role}</td>`+
    `<td>${x.last_rssi??""}</td><td class="${qClass(q)}">${q!=null?q+"%":""}</td><td>${net}</td><td class=dim>${netr}</td><td>${x.count}</td>`+
    `<td class=dim>${x.last_seen?ageStr(x.last_seen):""}</td></tr>`;}).join("")||
    `<tr><td colspan=9 class=dim>no devices yet — is the channel right? click “Scan spectrum” to check noise.</td></tr>`;
@@ -635,7 +638,7 @@ function bindRows(){document.querySelectorAll("#devices tr.click").forEach(tr=>
 
 // ---- routing graph: radial BFS from the coordinator, LQI-coloured edges ----
 // Force-directed routing graph (HA-style physics) with cached, stable positions.
-let rgScale=1,rgTx=0,rgTy=0,showLeaves=true,rgPos={},rgSig="";
+let rgScale=1,rgTx=0,rgTy=0,showLeaves=true,showForeign=true,rgForeign={},rgChan={},rgPos={},rgSig="";
 let rgSx=1,rgSy=1,rgIsolate="",rgShowNetLqi=false,rgDist={},rgNetLqi={};
 const RGCX=300,RGCY=170;
 let rgNodes=[],rgEdges=[],rgNameOf={},rgDeg={},rgAlpha=0,rgDirty=true,rgStarted=false;
@@ -649,7 +652,9 @@ function bfsPath(adj,from,to){if(from===to)return [from];
 function renderGraph(){
   const svg=document.getElementById("routing");
   const adj=new Map(),nodes=new Set(),nameOf={},deg={};
-  (routing.nodes||[]).forEach(n=>{nodes.add(n.addr);nameOf[n.addr]=n.name||n.mfg;});
+  rgForeign={};rgChan={};
+  (routing.nodes||[]).forEach(n=>{nodes.add(n.addr);nameOf[n.addr]=n.name||n.mfg;
+    if(n.foreign){rgForeign[n.addr]=true;rgChan[n.addr]=n.last_channel;}});
   (routing.edges||[]).forEach(e=>{nodes.add(e.src);nodes.add(e.dst);
     (adj.get(e.src)||adj.set(e.src,new Set()).get(e.src)).add(e.dst);
     (adj.get(e.dst)||adj.set(e.dst,new Set()).get(e.dst)).add(e.src);});
@@ -658,7 +663,8 @@ function renderGraph(){
   for(const a of nodes)deg[a]=(adj.get(a)||new Set()).size;
   rgNetLqi={};devices.forEach(d=>{if(d.net_lqi!=null)rgNetLqi[d.addr]=d.net_lqi;});
   let shown=new Set(nodes);
-  if(!showLeaves)shown=new Set([...nodes].filter(a=>a===COORD||deg[a]>1));
+  if(!showLeaves)shown=new Set([...shown].filter(a=>a===COORD||deg[a]>1));
+  if(!showForeign)shown=new Set([...shown].filter(a=>!rgForeign[a]));
   // Isolate: show only the selected device's path back to the coordinator.
   if(rgIsolate&&nodes.has(rgIsolate)){
     const path=bfsPath(adj,rgIsolate,COORD);
@@ -725,9 +731,9 @@ function rgDraw(){const svg=document.getElementById("routing");if(!rgNodes.lengt
   const light=document.body.classList.contains("light");
   const lblc=light?"#39434f":"#aeb9c4",stroke=light?"#ffffff":"#0d1117";
   for(const a of rgNodes){const P=rgPos[a];if(!P)continue;const p=rgPX(P);
-    const isC=a===COORD,leaf=rgDeg[a]<=1,r=(isC?9:(leaf?4.5:6.5))/Math.sqrt(rgScale),
-      fill=isC?"#58a6ff":(rgDeg[a]===0?"#f85149":(leaf?"#8b97a3":(light?"#7b8794":"#c9d4e0")));
-    const lbl=isC?"coordinator":(rgNameOf[a]||a);
+    const fgn=rgForeign[a],isC=a===COORD,leaf=rgDeg[a]<=1,r=(isC?9:(leaf?4.5:6.5))/Math.sqrt(rgScale),
+      fill=isC?"#58a6ff":(fgn?"#bc8cff":(rgDeg[a]===0?"#f85149":(leaf?"#8b97a3":(light?"#7b8794":"#c9d4e0"))));
+    const lbl=(isC?"coordinator":(rgNameOf[a]||a))+(fgn?`/FGN:${rgChan[a]||"?"}`:"");
     if(P.fixed)s+=`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${(r+2.5).toFixed(1)}" fill="none" stroke="#58a6ff" stroke-width="${(1.2/rgScale).toFixed(2)}" opacity=".8"/>`;
     s+=`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${r.toFixed(1)}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" data-addr="${a}"/>`;
     s+=`<text x="${p.x.toFixed(1)}" y="${(p.y-r-3/rgScale).toFixed(1)}" font-size="${fs}" fill="${lblc}" text-anchor="middle">${lbl}</text>`;}
@@ -897,6 +903,8 @@ document.querySelectorAll("[data-exp]").forEach(b=>b.onclick=()=>{
   window.open(`/api/export?what=${b.dataset.exp}&format=${fmt}`,"_blank");});
 on("rg-leaves",()=>{showLeaves=!showLeaves;
   document.getElementById("rg-leaves").classList.toggle("on",showLeaves);renderGraph();savePref("show_leaves",showLeaves?"1":"0");});
+on("rg-foreign",()=>{showForeign=!showForeign;
+  document.getElementById("rg-foreign").classList.toggle("on",showForeign);renderGraph();savePref("show_foreign",showForeign?"1":"0");});
 on("rg-reset",()=>{rgScale=1;rgTx=0;rgTy=0;rgSx=1;rgSy=1;
   for(const k in rgPos)delete rgPos[k].fixed; // release any dragged/pinned nodes
   document.getElementById("rg-sx").value=1;document.getElementById("rg-sy").value=1;rgReheat(0.9);
@@ -1055,6 +1063,7 @@ async function initPrefs(){const p=await j("/api/prefs")||{};
   if(p.rg_sx){rgSx=+p.rg_sx;const e=document.getElementById("rg-sx");if(e)e.value=rgSx;}
   if(p.rg_sy){rgSy=+p.rg_sy;const e=document.getElementById("rg-sy");if(e)e.value=rgSy;}
   if(p.show_leaves!=null){showLeaves=p.show_leaves!=="0";document.getElementById("rg-leaves").classList.toggle("on",showLeaves);}
+  if(p.show_foreign!=null){showForeign=p.show_foreign!=="0";document.getElementById("rg-foreign").classList.toggle("on",showForeign);}
   if(p.net_lqi==="1"){rgShowNetLqi=true;document.getElementById("rg-netlqi").classList.add("on");}
   if(p.sp_dwell){const e=document.getElementById("sp-dwell");if(e)e.value=p.sp_dwell;}
   if(p.exp_fmt){const e=document.getElementById("exp-fmt");if(e)e.value=p.exp_fmt;}

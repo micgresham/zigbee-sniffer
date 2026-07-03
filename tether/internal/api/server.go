@@ -416,10 +416,16 @@ func (s *Server) enrich(rows []map[string]any) []map[string]any {
 	if s.Reg == nil {
 		return rows
 	}
+	ours := panHex(s.RT)
 	for _, r := range rows {
 		addr, ok := r["addr"].(string)
 		if !ok {
 			continue
+		}
+		// Flag devices on a different network so the UI can separate them. The
+		// coordinator (0x0000) exists on every network — never flag it foreign.
+		if pan, ok := r["pan"].(string); ok && pan != "" && ours != "" && pan != ours && addr != "0x0000" {
+			r["foreign"] = true
 		}
 		if r["name"] == "" || r["name"] == nil {
 			r["name"] = s.Reg.NameFull(addr) // friendly name, or a Hue-bridge name
@@ -466,7 +472,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/routing", func(w http.ResponseWriter, r *http.Request) {
 		rt := s.DB.Routing()
 		if nodes, ok := rt["nodes"].([]map[string]any); ok {
-			s.enrich(nodes)
+			s.enrich(nodes) // marks foreign nodes; the client colours/toggles them
 		}
 		writeJSON(w, rt)
 	})
@@ -711,19 +717,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/networks", func(w http.ResponseWriter, r *http.Request) {
 		nets := nz(s.DB.Networks())
 		ours := panHex(s.RT)
-		// A paired Hue bridge reports its own Zigbee channel. Any FOREIGN network
-		// on that channel is almost certainly the Hue network, so label it even if
-		// we never caught a Hue device's extended address on-air.
-		if s.Hue != nil {
-			if hueCh, ok := s.Hue.Status()["channel"].(int); ok && hueCh > 0 {
-				for _, n := range nets {
-					pan, _ := n["pan"].(string)
-					lbl, _ := n["label"].(string)
-					ch, _ := n["channel"].(int64)
-					if pan != ours && lbl == "" && int(ch) == hueCh {
-						n["label"] = "Philips Hue (bridge)"
-					}
-				}
+		// Authoritative network identity: a paired Hue bridge reports its own
+		// Zigbee channel, so a FOREIGN network on that channel IS the Hue network —
+		// label it "Philips Hue" (a bridge fact, overriding any per-device OUI).
+		hueCh := s.hueChannel()
+		for _, n := range nets {
+			pan, _ := n["pan"].(string)
+			ch, _ := n["channel"].(int64)
+			if pan != ours && hueCh > 0 && int(ch) == hueCh {
+				n["label"] = "Philips Hue"
 			}
 		}
 		writeJSON(w, map[string]any{"networks": nets, "ours": ours})

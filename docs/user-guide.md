@@ -81,6 +81,10 @@ Your home base — three panels:
 - **Isolate** a device to show only its path back to the coordinator.
 - **Net LQI** toggle prints the network LQI on each link.
 - **End devices** toggle shows/hides leaf nodes (routing backbone only).
+- **Foreign** toggle shows/hides devices on *other* networks (e.g. Philips Hue). Foreign nodes are
+  **purple** and labelled `…/FGN:<channel>`. They appear once you've heard that network — pin your
+  channel there or use the **Monitor** button on the Zigbee-networks panel; their names (from a
+  paired Hue bridge) and manufacturer are saved and survive restarts.
 - Edge colour = link quality **as heard by the sniffer**; a **dashed** line means we haven't yet
   observed that device's parent.
 

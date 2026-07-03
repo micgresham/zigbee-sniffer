@@ -41,13 +41,19 @@ func New() *Registry {
 // that carries both (e.g. the NWK header's source short + source IEEE). This is
 // what lets us attach an extended-address name (Hue) or vendor (OUI) to the
 // short addresses the rest of the app works in.
-func (r *Registry) SetShortExt(short uint16, ext uint64) {
+// SetShortExt returns true if this is a new/changed mapping (so callers can
+// persist it without writing on every frame).
+func (r *Registry) SetShortExt(short uint16, ext uint64) bool {
 	if ext == 0 {
-		return
+		return false
 	}
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.extOf[short] == ext {
+		return false
+	}
 	r.extOf[short] = ext
-	r.mu.Unlock()
+	return true
 }
 
 // NameFull returns a real device name for a short address: a friendly name if
