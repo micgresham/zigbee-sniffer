@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -158,6 +159,10 @@ type Server struct {
 
 // incidentSilenceDefault mirrors the detector's default when unset.
 const incidentSilenceDefault = 120
+
+// injectCtr provides monotonic sequence + frame-counter values for injected ZDO
+// frames (a fresh, high frame counter is accepted by devices as non-replayed).
+var injectCtr atomic.Uint32
 
 // writePcapTAP writes captured frames as a classic pcap with linktype
 // LINKTYPE_IEEE802_15_4_TAP (283) — the modern encapsulation Wireshark uses,
@@ -802,6 +807,55 @@ func (s *Server) Handler() http.Handler {
 		hops, source, complete := s.traceroute(short)
 		writeJSON(w, map[string]any{"target": fmt.Sprintf("0x%04x", short),
 			"hops": hops, "source": source, "complete": complete})
+	})
+	// Active ZDO interrogation. Builds an NWK-secured ZDO request (bindings /
+	// endpoints / node descriptor) and TRANSMITS it on the network. The device's
+	// reply is captured passively and appears in its recent messages.
+	// ⚠ This transmits — gate behind an explicit user confirmation.
+	mux.HandleFunc("/api/interrogate", func(w http.ResponseWriter, r *http.Request) {
+		target, ok := parseShortAddr(r.URL.Query().Get("addr"))
+		if !ok {
+			writeJSON(w, map[string]any{"ok": false, "reason": "bad addr"})
+			return
+		}
+		var key []byte
+		if s.RT != nil {
+			key = s.RT.Key()
+		}
+		if len(key) != 16 {
+			writeJSON(w, map[string]any{"ok": false, "reason": "no network key set — can't build a secured frame"})
+			return
+		}
+		var cluster uint16
+		var args []byte
+		switch r.URL.Query().Get("what") {
+		case "endpoints":
+			cluster, args = decode.ZDOActiveEPReq, []byte{byte(target), byte(target >> 8)}
+		case "node":
+			cluster, args = decode.ZDONodeDescReq, []byte{byte(target), byte(target >> 8)}
+		default: // bindings
+			cluster, args = decode.ZDOMgmtBindReq, []byte{0x00} // StartIndex 0
+		}
+		seq := byte(injectCtr.Add(1))
+		frame := decode.BuildZDORequest(decode.ZDORequest{
+			TargetShort: target, MacDst: target, SrcShort: 0xfffe,
+			SrcExt: 0x00124bfffffffe01, DstPan: uint16(panOf(s.RT)),
+			Cluster: cluster, ZDPArgs: args,
+			FrameCounter: 0x30000000 + injectCtr.Load(),
+			MacSeq:       seq, NwkSeq: seq, ApsSeq: seq, Tsn: seq, Key: key,
+		})
+		if frame == nil {
+			writeJSON(w, map[string]any{"ok": false, "reason": "failed to build frame"})
+			return
+		}
+		port, _, okA, _, reason := s.allocate("probe")
+		if !okA {
+			writeJSON(w, map[string]any{"ok": false, "reason": reason})
+			return
+		}
+		s.sendFnTo(port, proto.CmdTxRawMsg(frame))
+		writeJSON(w, map[string]any{"ok": true, "target": fmt.Sprintf("0x%04x", target),
+			"bytes": len(frame)})
 	})
 	mux.HandleFunc("/api/incidents", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, nz(s.DB.Incidents(200)))

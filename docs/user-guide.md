@@ -92,7 +92,9 @@ Your home base — three panels:
 (endpoints + in/out clusters, manufacturer, model, power — pulled from the coordinator/ZHA, no
 on-air interrogation; **Re-interview** re-pulls it on demand) and a **Path from coordinator**
 button that plots the route to the device hop-by-hop with per-hop LQI (from ZHA's neighbour table,
-or the sniffer's observed links).
+or the sniffer's observed links). An **Active interrogation** section can **transmit** an encrypted
+ZDO request (read bindings / query endpoints) directly to the device — gated behind a confirmation,
+and needs firmware ≥ 0.28; the reply shows up in the device's Recent messages.
 
 A **⚠ channel-hopping** badge appears in the top bar whenever the radio is hopping (which only
 captures your network part of the time) — click it to pin back to your channel.

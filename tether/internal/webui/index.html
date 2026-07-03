@@ -847,6 +847,10 @@ async function showDetail(addr){if(!addr||addr==="—")return;selected=addr;
    capsHtml(di)+
    `<h2 style="font-size:12px;color:var(--dim);text-transform:uppercase;margin-top:14px;display:flex;justify-content:space-between;align-items:center">Path from coordinator <button id="d-trace" style="font-size:11px;padding:2px 8px">Trace</button></h2>`+
    `<div id="d-trace-out" class=dim style="font-size:11px">click <b>Trace</b> to plot the route from the coordinator to this device.</div>`+
+   `<h2 style="font-size:12px;color:var(--dim);text-transform:uppercase;margin-top:14px">Active interrogation <span class=weak style="text-transform:none;font-weight:400">⚠ transmits on your network</span></h2>`+
+   `<div class=dim style="font-size:11px;margin-bottom:6px">Sends an encrypted ZDO request on-air; the device's reply appears in Recent messages below (needs firmware ≥ 0.28).</div>`+
+   `<div style="display:flex;gap:6px;flex-wrap:wrap"><button id="d-bind" style="font-size:11px;padding:2px 8px">Read bindings ⚠</button><button id="d-eps" style="font-size:11px;padding:2px 8px">Query endpoints ⚠</button></div>`+
+   `<div id="d-intg-out" class=dim style="font-size:11px;margin-top:4px"></div>`+
    `<h2 style="font-size:12px;color:var(--dim);text-transform:uppercase;margin-top:14px;display:flex;justify-content:space-between;align-items:center">Active test <button id="d-probe" style="font-size:11px;padding:2px 8px">Probe now ⚠</button></h2>`+
    `<div class=dim style="font-size:11px;margin-bottom:6px">An ACK proves the device's radio is alive & on-channel right now — useful to confirm a "dropped" device. RSSI here is from the probing radio.</div>`+
    `<table><thead><tr><th>Time</th><th>Radio</th><th>Result</th><th>RSSI⌖</th></tr></thead><tbody id="d-probes">`+
@@ -860,6 +864,14 @@ async function showDetail(addr){if(!addr||addr==="—")return;selected=addr;
   if(pb)pb.onclick=async()=>{const p=document.getElementById("at-radio")?document.getElementById("at-radio").value:"";
     if(!p&&!await gateFn("probe"))return;
     post(`/api/probe?addr=${addr}${p?'&port='+encodeURIComponent(p):''}`).then(()=>setTimeout(()=>showDetail(addr),700));};
+  const interrogate=async what=>{
+    if(!confirm("⚠ This TRANSMITS an encrypted ZDO request onto your live Zigbee network to query this device. It needs firmware ≥ 0.28. Continue?"))return;
+    const out=document.getElementById("d-intg-out");out.textContent="sending…";
+    const r=await fetch(`/api/interrogate?addr=${addr}&what=${what}`,{method:"POST"}).then(x=>x.json()).catch(()=>null);
+    if(r&&r.ok){out.textContent=`sent (${r.bytes} bytes) — watch Recent messages for the reply`;setTimeout(()=>showDetail(addr),2000);}
+    else out.innerHTML=`<span class=weak>⚠ ${(r&&r.reason)||"failed"}</span>`;};
+  const bb=document.getElementById("d-bind");if(bb)bb.onclick=()=>interrogate("bindings");
+  const eb=document.getElementById("d-eps");if(eb)eb.onclick=()=>interrogate("endpoints");
   const rb=document.getElementById("d-reint");
   if(rb)rb.onclick=async()=>{rb.textContent="re-interviewing…";await post("/api/reinterview");
     setTimeout(()=>showDetail(addr),1500);};

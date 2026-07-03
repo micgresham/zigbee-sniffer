@@ -44,6 +44,7 @@ const (
 	CmdOtaEnd     = 0x8D
 	CmdOtaAbort   = 0x8E
 	CmdBeaconReq  = 0x8F
+	CmdTxRaw      = 0x90
 )
 
 // OTA states (MsgOtaStatus.State).
@@ -160,6 +161,9 @@ func CmdOtaAbortMsg(target byte) []byte { return Encode(CmdOtaAbort, []byte{targ
 // CmdBeaconReqMsg asks the radio to transmit an 802.15.4 beacon request on the
 // current channel; coordinators/routers reply with a beacon revealing their PAN.
 func CmdBeaconReqMsg() []byte { return Encode(CmdBeaconReq, nil) }
+
+// CmdTxRawMsg transmits a host-built raw MPDU (the radio appends the FCS).
+func CmdTxRawMsg(mpdu []byte) []byte { return Encode(CmdTxRaw, mpdu) }
 
 // CmdProbeMsg requests an active MAC probe of target (short addr) on pan.
 func CmdProbeMsg(target, pan uint16) []byte {

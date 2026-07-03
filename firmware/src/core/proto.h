@@ -48,6 +48,7 @@ typedef enum {
     CMD_OTA_END        = 0x8D,   // target(1)
     CMD_OTA_ABORT      = 0x8E,   // target(1)
     CMD_BEACON_REQ     = 0x8F,   // active scan: TX an 802.15.4 beacon request (no payload)
+    CMD_TX_RAW         = 0x90,   // transmit a host-built raw MPDU (radio appends FCS)
 } zb_msg_type_t;
 
 // OTA target: 0 = this (tethered) C6, 1..3 = satellite over SPI.

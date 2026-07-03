@@ -18,6 +18,7 @@
 #include "codec.h"
 #include "config_nvs.h"
 #include "radio_capture.h"
+#include "esp_ieee802154.h"
 #include "ed_scan.h"
 #include "probe.h"
 #include "beacon.h"
@@ -223,6 +224,21 @@ static void handle_command(uint8_t type, const uint8_t *p, uint16_t len)
         radio_lock();
         beacon_request_send();
         radio_unlock();
+        send_ack(type, 0);
+        break;
+    case CMD_TX_RAW:
+        // Transmit a host-built raw MPDU (e.g. an active ZDO interrogation). The
+        // radio appends the 2-byte FCS, so the PHY length is len + 2.
+        if (len >= 3 && len <= 125) {
+            radio_lock();
+            esp_ieee802154_set_rx_when_idle(true);
+            esp_ieee802154_receive();
+            uint8_t f[1 + 128];
+            f[0] = len + 2;
+            memcpy(&f[1], p, len);
+            esp_ieee802154_transmit(f, false);
+            radio_unlock();
+        }
         send_ack(type, 0);
         break;
     case CMD_OTA_BEGIN:
