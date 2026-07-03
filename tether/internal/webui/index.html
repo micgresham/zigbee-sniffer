@@ -613,6 +613,9 @@ async function showDiag(d){if(!d)return;selected=null;
   document.getElementById("drawer").classList.add("open");}
 // ---- frame inspector (layer-by-layer decode + export) ----
 let lastFrame=null;
+// On-demand drawer results (trace / interrogation) cached per device, so the
+// 3-second drawer auto-refresh doesn't wipe them when it rebuilds the drawer.
+let traceCache={},intgCache={};
 function hexdump(hexstr){const b=hexstr.match(/../g)||[];let out="";
   for(let i=0;i<b.length;i+=16){const row=b.slice(i,i+16);
     const off=i.toString(16).padStart(4,"0");
@@ -860,6 +863,9 @@ async function showDetail(addr){if(!addr||addr==="—")return;selected=addr;
    `<table><thead><tr><th>Time</th><th>RSSI</th><th>Type</th><th>Summary</th></tr></thead><tbody>`+
    msgs.map(m=>`<tr><td class=dim>${fmtTime(m.ts)}</td><td>${m.rssi}</td><td>${m.type}${m.decrypted?' <span class=lock>🔓</span>':''}</td><td>${annotate(m.summary)}</td></tr>`).join("")+
    `</tbody></table>`;
+  // Restore any on-demand results so the periodic refresh doesn't blank them.
+  if(traceCache[addr])document.getElementById("d-trace-out").innerHTML=traceCache[addr];
+  if(intgCache[addr])document.getElementById("d-intg-out").innerHTML=intgCache[addr];
   const pb=document.getElementById("d-probe");
   if(pb)pb.onclick=async()=>{const p=document.getElementById("at-radio")?document.getElementById("at-radio").value:"";
     if(!p&&!await gateFn("probe"))return;
@@ -868,8 +874,10 @@ async function showDetail(addr){if(!addr||addr==="—")return;selected=addr;
     if(!confirm("⚠ This TRANSMITS an encrypted ZDO request onto your live Zigbee network to query this device. It needs firmware ≥ 0.28. Continue?"))return;
     const out=document.getElementById("d-intg-out");out.textContent="sending…";
     const r=await fetch(`/api/interrogate?addr=${addr}&what=${what}`,{method:"POST"}).then(x=>x.json()).catch(()=>null);
-    if(r&&r.ok){out.textContent=`sent (${r.bytes} bytes) — watch Recent messages for the reply`;setTimeout(()=>showDetail(addr),2000);}
-    else out.innerHTML=`<span class=weak>⚠ ${(r&&r.reason)||"failed"}</span>`;};
+    let html;
+    if(r&&r.ok){html=`sent (${r.bytes} bytes) — watch Recent messages for the reply`;setTimeout(()=>showDetail(addr),2000);}
+    else html=`<span class=weak>⚠ ${(r&&r.reason)||"failed"}</span>`;
+    out.innerHTML=html;intgCache[addr]=html;};
   const bb=document.getElementById("d-bind");if(bb)bb.onclick=()=>interrogate("bindings");
   const eb=document.getElementById("d-eps");if(eb)eb.onclick=()=>interrogate("endpoints");
   const rb=document.getElementById("d-reint");
@@ -878,9 +886,11 @@ async function showDetail(addr){if(!addr||addr==="—")return;selected=addr;
   const tb=document.getElementById("d-trace");
   if(tb)tb.onclick=async()=>{const out=document.getElementById("d-trace-out");out.textContent="tracing…";
     const t=await j(`/api/traceroute?addr=${addr}`);
-    if(!t||!t.hops||!t.hops.length){out.innerHTML=`<span class=weak>${(t&&t.source)||"no path found"}</span>`;return;}
-    out.innerHTML=`<div class=dim style="margin-bottom:4px">via ${t.source} · ${t.hops.length} hop${t.hops.length>1?"s":""}</div>`+
-      t.hops.map((h,i)=>`<div style="padding:2px 0">${i===0?"📡":"&nbsp;&nbsp;".repeat(i)+"└→"} <b>${h.name||h.addr}</b> <span class="dim mono">${h.addr}</span>${h.lqi!=null?` · <span class="${lqiClass(h.lqi)}">LQI ${h.lqi}</span>`:""}</div>`).join("");};
+    let html;
+    if(!t||!t.hops||!t.hops.length)html=`<span class=weak>${(t&&t.source)||"no path found"}</span>`;
+    else html=`<div class=dim style="margin-bottom:4px">via ${t.source} · ${t.hops.length} hop${t.hops.length>1?"s":""}</div>`+
+      t.hops.map((h,i)=>`<div style="padding:2px 0">${i===0?"📡":"&nbsp;&nbsp;".repeat(i)+"└→"} <b>${h.name||h.addr}</b> <span class="dim mono">${h.addr}</span>${h.lqi!=null?` · <span class="${lqiClass(h.lqi)}">LQI ${h.lqi}</span>`:""}</div>`).join("");
+    out.innerHTML=html;traceCache[addr]=html;};
   document.getElementById("drawer").classList.add("open");}
 document.getElementById("dclose").onclick=()=>{document.getElementById("drawer").classList.remove("open");selected=null;};
 
