@@ -791,25 +791,28 @@ function bindGraphZoom(){const svg=document.getElementById("routing");
     const r=svg.getBoundingClientRect(),mx=(e.clientX-r.left)/r.width*600,my=(e.clientY-r.top)/r.height*340;
     rgTx=mx-(mx-rgTx)*(ns/rgScale);rgTy=my-(my-rgTy)*(ns/rgScale);rgScale=ns;
     rgReheat(0.4);},{passive:false}); // nudge the physics so it re-spaces as you zoom
-  let drag=null,dragNode=null;
+  let drag=null,dragNode=null,downXY=null;
   // Convert a mouse event to routing-graph (rgPos) coordinates, undoing the
   // pan/zoom transform and the X/Y spacing so a grabbed node follows the cursor.
   function mouseToNode(e){const r=svg.getBoundingClientRect();
     const vx=(e.clientX-r.left)/r.width*600,vy=(e.clientY-r.top)/r.height*340;
     const gx=(vx-rgTx)/rgScale,gy=(vy-rgTy)/rgScale;
     return {x:RGCX+(gx-RGCX)/(rgSx||1),y:RGCY+(gy-RGCY)/(rgSy||1)};}
-  svg.addEventListener("mousedown",e=>{moved=false;
+  svg.addEventListener("mousedown",e=>{moved=false;downXY={x:e.clientX,y:e.clientY};
     const c=e.target.closest("circle[data-addr]");
     if(c&&c.dataset.addr!==COORD){dragNode=c.dataset.addr;svg.style.cursor="grabbing";e.preventDefault();return;}
     drag={x:e.clientX,y:e.clientY,tx:rgTx,ty:rgTy};svg.style.cursor="grabbing";e.preventDefault();});
   window.addEventListener("mousemove",e=>{
+    // Only treat it as a DRAG once the pointer has moved past a small threshold —
+    // otherwise a click with tiny jitter would pin the node and suppress the click.
+    if(downXY&&Math.abs(e.clientX-downXY.x)+Math.abs(e.clientY-downXY.y)<=3)return;
     if(dragNode){const P=rgPos[dragNode];if(P){const p=mouseToNode(e);
       P.x=p.x;P.y=p.y;P.fixed=true;P.vx=P.vy=0;}
       moved=true;rgReheat(0.35);rgDirty=true;return;}   // pull it out; rest re-space
     if(!drag)return;const r=svg.getBoundingClientRect();
-    if(Math.abs(e.clientX-drag.x)+Math.abs(e.clientY-drag.y)>3)moved=true;
+    moved=true;
     rgTx=drag.tx+(e.clientX-drag.x)/r.width*600;rgTy=drag.ty+(e.clientY-drag.y)/r.height*340;rgDirty=true;});
-  window.addEventListener("mouseup",()=>{drag=null;dragNode=null;svg.style.cursor="grab";});}
+  window.addEventListener("mouseup",()=>{drag=null;dragNode=null;downXY=null;svg.style.cursor="grab";});}
 
 // ---- device detail drawer ----
 function capsHtml(di){
