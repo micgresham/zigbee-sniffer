@@ -469,7 +469,7 @@ function addrLabel(hex){return addrName(hex)||hex;}
 // after the page loads — so without this, earlier captures show as an empty list).
 async function loadFrames(){const p=await j("/api/frames");if(!p)return;
   const seen=new Set(frames.map(f=>f.ts+"/"+f.summary));
-  const seed=p.map(x=>({ts:x.ts,channel:x.channel,rssi:x.rssi,lqi:x.lqi,type:x.type,summary:x.summary,decrypted:x.decrypted}))
+  const seed=p.map(x=>({ts:x.ts,channel:x.channel,rssi:x.rssi,lqi:x.lqi,type:x.type,summary:x.summary,decrypted:x.decrypted,raw:x.raw}))
     .filter(f=>!seen.has(f.ts+"/"+f.summary));
   frames=frames.concat(seed).sort((a,b)=>b.ts-a.ts).slice(0,200);}
 
@@ -609,6 +609,43 @@ async function showDiag(d){if(!d)return;selected=null;
   document.getElementById("dbody").innerHTML=h;
   const ob=document.getElementById("dg-open");if(ob)ob.onclick=()=>showDetail(d.addr);
   document.getElementById("drawer").classList.add("open");}
+// ---- frame inspector (layer-by-layer decode + export) ----
+let lastFrame=null;
+function hexdump(hexstr){const b=hexstr.match(/../g)||[];let out="";
+  for(let i=0;i<b.length;i+=16){const row=b.slice(i,i+16);
+    const off=i.toString(16).padStart(4,"0");
+    const asc=row.map(h=>{const c=parseInt(h,16);return c>=32&&c<127?String.fromCharCode(c):".";}).join("");
+    out+=`${off}  ${row.join(" ").padEnd(47," ")}  ${asc}\n`;}
+  return out;}
+function layerTbl(title,obj){if(!obj)return"";
+  const rows=Object.entries(obj).filter(([k,v])=>v!==""&&v!=null&&v!==false)
+    .map(([k,v])=>`<div>${k.replace(/_/g," ")}</div><div class=mono>${v===true?"yes":v}</div>`).join("");
+  return `<h2 style="font-size:12px;color:var(--dim);text-transform:uppercase;margin-top:12px">${title}</h2><div class=kv>${rows}</div>`;}
+async function showFrame(f){if(!f||!f.raw){alert("No raw bytes for this frame (older capture).");return;}
+  selected=null;document.getElementById("d-title").textContent="Frame";
+  const d=await j("/api/decode?hex="+f.raw)||{};lastFrame={meta:f,decode:d};
+  let h=`<div class=kv>`+
+    `<div>Time</div><div>${whenStr(f.ts)}</div>`+
+    `<div>Channel</div><div>${f.channel}</div>`+
+    `<div>RSSI ⌖</div><div>${f.rssi} dBm</div>`+
+    `<div>LQI</div><div><span class="${lqiClass(f.lqi)}">${f.lqi}</span></div>`+
+    `<div>Type</div><div>${d.summary||f.type||""}</div>`+
+    `<div>Length</div><div>${d.len||"?"} bytes</div></div>`;
+  h+=layerTbl("MAC (802.15.4)",d.mac)+layerTbl("NWK (Zigbee)",d.nwk)+layerTbl("APS",d.aps)+layerTbl("ZCL",d.zcl);
+  h+=`<h2 style="font-size:12px;color:var(--dim);text-transform:uppercase;margin-top:12px">Raw bytes</h2>`+
+     `<pre class=mono style="font-size:11px;white-space:pre;overflow:auto;background:var(--field);padding:8px;border-radius:6px">${hexdump(f.raw)}</pre>`+
+     `<div style="margin-top:10px;display:flex;gap:8px">`+
+     `<button id="fr-copy" style="font-size:12px;padding:4px 12px">Copy hex</button>`+
+     `<button id="fr-export" style="font-size:12px;padding:4px 12px">Export JSON</button></div>`;
+  document.getElementById("dbody").innerHTML=h;
+  document.getElementById("fr-copy").onclick=()=>{navigator.clipboard&&navigator.clipboard.writeText(f.raw);};
+  document.getElementById("fr-export").onclick=()=>{
+    const blob=new Blob([JSON.stringify({meta:f,decode:d},null,2)],{type:"application/json"});
+    const a=document.createElement("a");a.href=URL.createObjectURL(blob);
+    a.download=`frame-${Math.round(f.ts)}-ch${f.channel}.json`;a.click();};
+  document.getElementById("drawer").classList.add("open");}
+document.getElementById("frames").addEventListener("click",e=>{
+  const tr=e.target.closest("tr[data-fi]");if(!tr)return;showFrame(frames[+tr.dataset.fi]);});
 async function loadConn(){
   const s=await j("/api/stats");const e=document.getElementById("connstats");
   if(s){
@@ -806,8 +843,8 @@ function render(){setConn();
     document.getElementById("m-cap").textContent=status.captured;
     document.getElementById("m-drop").textContent=status.dropped_buf;}
   renderStatus();
-  document.getElementById("frames").innerHTML=frames.slice(0,80).map(f=>
-   `<tr><td class=dim>${fmtTime(f.ts)}</td><td>${f.channel}</td><td>${f.rssi}</td><td class="${lqiClass(f.lqi)}">${f.lqi}</td>`+
+  document.getElementById("frames").innerHTML=frames.slice(0,80).map((f,i)=>
+   `<tr class=click data-fi="${i}" title="click to inspect this frame"><td class=dim>${fmtTime(f.ts)}</td><td>${f.channel}</td><td>${f.rssi}</td><td class="${lqiClass(f.lqi)}">${f.lqi}</td>`+
    `<td>${f.type}${f.decrypted?' <span class=lock>🔓</span>':''}</td><td>${annotate(f.summary)}</td></tr>`).join("");
   updateCapInd();
 }
@@ -953,6 +990,9 @@ function renderStatus(){
      `<span>hop <b>${s.hop_dwell_ms?s.hop_dwell_ms+"ms":"off"}</b></span>`+
      `<span>captured <b>${s.captured??0}</b></span><span>dropped <b>${s.dropped_buf??0}</b></span>`;
     if(s.mode_id!=null)document.getElementById("c-mode").value=s.mode_id;
+    // Reflect the device's ACTUAL hop state in the Config input (unless editing).
+    const hd=document.getElementById("c-dwell");
+    if(hd&&document.activeElement!==hd)hd.value=s.hop_dwell_ms??0;
   }
 }
 

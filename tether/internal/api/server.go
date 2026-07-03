@@ -19,6 +19,7 @@ import (
 	"github.com/coder/websocket"
 
 	"zbsniff/internal/config"
+	"zbsniff/internal/decode"
 	"zbsniff/internal/logbuf"
 	"zbsniff/internal/names"
 	"zbsniff/internal/proto"
@@ -149,6 +150,8 @@ type Server struct {
 	About      map[string]any                  // version/build metadata for the About tab
 	Prefs      func() map[string]string        // current web-UI preferences (from config)
 	Silence    func() int                      // current incident silence threshold (seconds)
+	Channel    func() int                      // configured capture channel (for restore after a scan)
+	HopDwell   func() int                      // configured hop dwell ms (0 = pinned)
 }
 
 // incidentSilenceDefault mirrors the detector's default when unset.
@@ -309,8 +312,38 @@ func (s *Server) sendFnTo(port string, frames ...[]byte) {
 // it also transmits a beacon request per channel, soliciting replies from even
 // idle networks. It publishes per-channel progress on the WebSocket, then
 // restores the original channel.
+// intendedChannel is the configured capture channel to return to after a scan
+// (NOT the momentary channel, which may be mid-hop). Falls back to last status.
+func (s *Server) intendedChannel() int {
+	if s.Channel != nil {
+		if c := s.Channel(); c >= int(proto.ChannelMin) && c <= int(proto.ChannelMax) {
+			return c
+		}
+	}
+	return statusChannel(s.RT)
+}
+func (s *Server) intendedHop() int {
+	if s.HopDwell != nil {
+		return s.HopDwell()
+	}
+	return statusHopDwell(s.RT)
+}
+
+// restoreCapture returns a radio to the configured channel + hop state (pinned
+// if hop is 0) and resumes capturing.
+func (s *Server) restoreCapture(port string) int {
+	frames := [][]byte{proto.CmdSetHopMsg(proto.AllChannelsMask(), uint16(s.intendedHop()))}
+	ch := s.intendedChannel()
+	if ch >= int(proto.ChannelMin) && ch <= int(proto.ChannelMax) {
+		frames = append(frames, proto.CmdSetChannelMsg(byte(ch)))
+	}
+	frames = append(frames, proto.CmdSetModeMsg(proto.ModeCapture), proto.CmdStartMsg())
+	s.sendFnTo(port, frames...)
+	return ch
+}
+
 func (s *Server) runSurvey(port string, dwellMs int, active bool) {
-	orig := statusChannel(s.RT)
+	s.sendFnTo(port, proto.CmdSetHopMsg(proto.AllChannelsMask(), 0)) // stop hopping while we sweep
 	for ch := int(proto.ChannelMin); ch <= int(proto.ChannelMax); ch++ {
 		s.sendFnTo(port,
 			proto.CmdSetChannelMsg(byte(ch)),
@@ -329,38 +362,21 @@ func (s *Server) runSurvey(port string, dwellMs int, active bool) {
 			time.Sleep(time.Duration(dwellMs) * time.Millisecond)
 		}
 	}
-	if orig >= int(proto.ChannelMin) && orig <= int(proto.ChannelMax) {
-		s.sendFnTo(port,
-			proto.CmdSetChannelMsg(byte(orig)),
-			proto.CmdSetModeMsg(proto.ModeCapture),
-			proto.CmdStartMsg())
-	}
-	s.Hub.Publish(map[string]any{"kind": "survey", "channel": orig, "active": active, "done": true})
+	restored := s.restoreCapture(port)
+	s.Hub.Publish(map[string]any{"kind": "survey", "channel": restored, "active": active, "done": true})
 }
 
 // runMonitorSnapshot dwells the given radio on a foreign channel for a while
 // (collecting that network's devices/names), then restores the capture channel.
 // Used on a single radio when no spare is available to monitor continuously.
 func (s *Server) runMonitorSnapshot(port string, ch, dwellMs int) {
-	orig := statusChannel(s.RT)
-	origHop := statusHopDwell(s.RT)
-	// Pin to the target channel (hop off) for a clean capture during the dwell,
-	// regardless of whether the radio was hopping.
+	// Pin to the target channel (hop off) for a clean capture during the dwell.
 	s.sendFnTo(port, proto.CmdSetHopMsg(proto.AllChannelsMask(), 0),
 		proto.CmdSetChannelMsg(byte(ch)), proto.CmdSetModeMsg(proto.ModeCapture), proto.CmdStartMsg())
 	s.Hub.Publish(map[string]any{"kind": "monitor", "channel": ch, "done": false})
 	time.Sleep(time.Duration(dwellMs) * time.Millisecond)
-	// Restore the original channel and hop state.
-	frames := [][]byte{}
-	if origHop > 0 {
-		frames = append(frames, proto.CmdSetHopMsg(proto.AllChannelsMask(), uint16(origHop)))
-	}
-	if orig >= int(proto.ChannelMin) && orig <= int(proto.ChannelMax) {
-		frames = append(frames, proto.CmdSetChannelMsg(byte(orig)))
-	}
-	frames = append(frames, proto.CmdSetModeMsg(proto.ModeCapture), proto.CmdStartMsg())
-	s.sendFnTo(port, frames...)
-	s.Hub.Publish(map[string]any{"kind": "monitor", "channel": orig, "done": true})
+	restored := s.restoreCapture(port) // back to the configured channel + hop state
+	s.Hub.Publish(map[string]any{"kind": "monitor", "channel": restored, "done": true})
 }
 
 // hueChannel returns the paired Hue bridge's Zigbee channel, or 0.
@@ -408,6 +424,74 @@ func (s *Server) cmd(frames ...[]byte) {
 	for _, f := range frames {
 		s.Send(f)
 	}
+}
+
+// decodeDetail returns a layer-by-layer breakdown of one frame for the inspector.
+func (s *Server) decodeDetail(mpdu []byte) map[string]any {
+	var key []byte
+	if s.RT != nil {
+		key = s.RT.Key()
+	}
+	d := decode.DecodeFrame(mpdu, key)
+	fmtA := func(a int64) string {
+		if a < 0 {
+			return "—"
+		}
+		if a > 0xFFFF {
+			return fmt.Sprintf("0x%016x", uint64(a))
+		}
+		return fmt.Sprintf("0x%04x", uint16(a))
+	}
+	name := func(a int64) string {
+		if a < 0 || a > 0xFFFF || s.Reg == nil {
+			return ""
+		}
+		return s.Reg.NameFull(fmt.Sprintf("0x%04x", uint16(a)))
+	}
+	panS := func(p int64) string {
+		if p < 0 {
+			return "—"
+		}
+		return fmt.Sprintf("0x%04x", uint16(p))
+	}
+	out := map[string]any{"summary": d.Summary(), "hex": hex.EncodeToString(mpdu), "len": len(mpdu)}
+	if m := d.MAC; m != nil {
+		out["mac"] = map[string]any{
+			"type": m.TypeName, "seq": m.Seq,
+			"src": fmtA(m.SrcAddr), "src_name": name(m.SrcAddr), "dst": fmtA(m.DstAddr), "dst_name": name(m.DstAddr),
+			"src_pan": panS(m.SrcPan), "dst_pan": panS(m.DstPan), "pan_compressed": m.PanComp,
+		}
+	}
+	if n := d.NWK; n != nil {
+		nwk := map[string]any{
+			"src": fmt.Sprintf("0x%04x", uint16(n.Src)), "dst": fmt.Sprintf("0x%04x", uint16(n.Dst)),
+			"radius": n.Radius, "seq": n.Seq, "secure": n.Secure, "decrypted": n.Decrypted,
+		}
+		if n.SrcExt != 0 {
+			nwk["src_ieee"] = fmt.Sprintf("0x%016x", n.SrcExt)
+		}
+		if n.CommandID >= 0 {
+			nwk["command"] = fmt.Sprintf("0x%02x", n.CommandID)
+		}
+		out["nwk"] = nwk
+	}
+	if a := d.APS; a != nil {
+		out["aps"] = map[string]any{
+			"type": a.FrameType, "cluster": clusterHex(a.Cluster), "profile": clusterHex(a.Profile),
+			"src_ep": a.SrcEP, "dst_ep": a.DstEP,
+		}
+	}
+	if z := d.ZCL; z != nil {
+		out["zcl"] = map[string]any{"type": z.FrameType, "tsn": z.TSN, "command": z.CommandID, "summary": z.Summary()}
+	}
+	return out
+}
+
+func clusterHex(v int) string {
+	if v < 0 {
+		return "—"
+	}
+	return fmt.Sprintf("0x%04x", v)
 }
 
 // enrich fills name + network-reported signal (from HA) onto device rows. The
@@ -497,6 +581,15 @@ func (s *Server) Handler() http.Handler {
 			limit = n
 		}
 		writeJSON(w, nz(s.DB.Packets(limit)))
+	})
+	// Full layer-by-layer decode of a single frame (by raw hex), for the inspector.
+	mux.HandleFunc("/api/decode", func(w http.ResponseWriter, r *http.Request) {
+		raw, err := hex.DecodeString(strings.TrimSpace(r.URL.Query().Get("hex")))
+		if err != nil || len(raw) == 0 {
+			writeJSON(w, map[string]any{"error": "bad hex"})
+			return
+		}
+		writeJSON(w, s.decodeDetail(raw))
 	})
 	mux.HandleFunc("/api/about", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, s.About)

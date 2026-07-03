@@ -4,6 +4,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -56,7 +57,8 @@ const edCap = 60000
 type DB struct {
 	mu       sync.Mutex
 	db       *sql.DB
-	edWrites int // counter for periodic ed_samples pruning
+	edWrites  int // counter for periodic ed_samples pruning
+	pktWrites int // counter for periodic packets pruning
 }
 
 // Open opens (or creates) the database at path (":memory:" for in-memory).
@@ -78,6 +80,7 @@ func Open(path string) (*DB, error) {
 	// Migrate older DBs (ignore "duplicate column" errors).
 	d.Exec(`ALTER TABLE pans ADD COLUMN label TEXT`)
 	d.Exec(`ALTER TABLE devices ADD COLUMN pan INTEGER`) // which network the device is on
+	d.Exec(`ALTER TABLE packets ADD COLUMN raw TEXT`)    // raw MPDU hex, for the frame inspector
 	// One-time trim: an existing DB may already hold millions of ed_samples from
 	// before the cap existed. Bring it back under edCap so queries are fast now.
 	d.Exec(`DELETE FROM ed_samples WHERE rowid <= (SELECT MAX(rowid) - ? FROM ed_samples)`, edCap)
@@ -92,7 +95,7 @@ func hexAddr(a sql.NullInt64) string {
 }
 
 // IngestFrame stores a decoded frame and updates device/link aggregates.
-func (d *DB) IngestFrame(ts float64, radio, channel int, rssi, lqi int, dec *decode.Decoded) {
+func (d *DB) IngestFrame(ts float64, radio, channel int, rssi, lqi int, dec *decode.Decoded, raw []byte) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	src := dec.MAC.SrcAddr
@@ -108,9 +111,14 @@ func (d *DB) IngestFrame(ts float64, radio, channel int, rssi, lqi int, dec *dec
 	if dst >= 0 {
 		dstN = dst
 	}
-	d.db.Exec(`INSERT INTO packets(ts,radio,channel,rssi,lqi,src,dst,ftype,summary,decrypted)
-	           VALUES(?,?,?,?,?,?,?,?,?,?)`,
-		ts, radio, channel, rssi, lqi, srcN, dstN, dec.MAC.TypeName, dec.Summary(), decrypted)
+	d.db.Exec(`INSERT INTO packets(ts,radio,channel,rssi,lqi,src,dst,ftype,summary,decrypted,raw)
+	           VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		ts, radio, channel, rssi, lqi, srcN, dstN, dec.MAC.TypeName, dec.Summary(), decrypted,
+		hex.EncodeToString(raw))
+	// Bound the packets table (raw bytes make rows bigger). Keep the newest ~300k.
+	if d.pktWrites++; d.pktWrites%4096 == 0 {
+		d.db.Exec(`DELETE FROM packets WHERE id <= (SELECT MAX(id) - 300000 FROM packets)`)
+	}
 
 	// Track PAN ids seen on-air (to flag foreign Zigbee networks). Ignore the
 	// broadcast PAN 0xFFFF and "not present". Beacons (an active scan's replies)
@@ -610,7 +618,7 @@ func (d *DB) Messages(addr, limit int) []map[string]any {
 func (d *DB) Packets(limit int) []map[string]any {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	rows, _ := d.db.Query(`SELECT ts,radio,channel,rssi,lqi,src,dst,ftype,summary,decrypted
+	rows, _ := d.db.Query(`SELECT ts,radio,channel,rssi,lqi,src,dst,ftype,summary,decrypted,raw
 	                       FROM packets ORDER BY id DESC LIMIT ?`, limit)
 	var out []map[string]any
 	if rows != nil {
@@ -619,12 +627,13 @@ func (d *DB) Packets(limit int) []map[string]any {
 			var ts sql.NullFloat64
 			var radio, ch, rssi, lqi, dec sql.NullInt64
 			var src, dst sql.NullInt64
-			var ftype, summary sql.NullString
-			rows.Scan(&ts, &radio, &ch, &rssi, &lqi, &src, &dst, &ftype, &summary, &dec)
+			var ftype, summary, raw sql.NullString
+			rows.Scan(&ts, &radio, &ch, &rssi, &lqi, &src, &dst, &ftype, &summary, &dec, &raw)
 			out = append(out, map[string]any{
 				"ts": ts.Float64, "radio": radio.Int64, "channel": ch.Int64,
 				"rssi": rssi.Int64, "lqi": lqi.Int64, "src": hexAddr(src), "dst": hexAddr(dst),
 				"type": ftype.String, "summary": summary.String, "decrypted": dec.Int64 == 1,
+				"raw": raw.String,
 			})
 		}
 	}

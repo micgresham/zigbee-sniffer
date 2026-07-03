@@ -103,6 +103,9 @@ Incident detection** (default 120 s). This is the log that catches devices dropp
 **Channel** + **Scan spectrum**. Below, **Live frames** shows decoded frames as they arrive,
 newest-first, with **friendly names in parentheses** (e.g. `Charlotte ceiling (0xcf67)`).
 
+- **Click any frame** to open the **inspector**: a layer-by-layer decode (MAC / NWK / APS / ZCL),
+  the resolved device name and IEEE address, and a raw hex dump. **Copy hex** or **Export JSON**
+  (the full decode + metadata) from the drawer.
 - The table **seeds from history** on load, so you see recent frames even during a quiet moment.
 - **Mode**: *Capture* = sniff frames; *ED spectrum sweep* = feed the spectrum tab (no capture);
   *Capture + ED* = both on one radio (time-sliced); *Idle* = park it. With multiple radios, prefer
