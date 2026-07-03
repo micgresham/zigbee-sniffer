@@ -55,6 +55,51 @@ type haDevice struct {
 	UserGivenName string          `json:"user_given_name"`
 	LQI           *int            `json:"lqi"`
 	RSSI          *int            `json:"rssi"`
+	Manufacturer  string          `json:"manufacturer"`
+	Model         string          `json:"model"`
+	PowerSource   string          `json:"power_source"`
+	DeviceType    string          `json:"device_type"`
+	Signature     struct {
+		Endpoints map[string]struct {
+			Profile json.RawMessage   `json:"profile_id"`
+			Type    json.RawMessage   `json:"device_type"`
+			In      []json.RawMessage `json:"input_clusters"`
+			Out     []json.RawMessage `json:"output_clusters"`
+		} `json:"endpoints"`
+	} `json:"signature"`
+	Neighbors []struct {
+		NWK          json.RawMessage `json:"nwk"`
+		Relationship string          `json:"relationship"`
+		LQI          *int            `json:"lqi"`
+	} `json:"neighbors"`
+}
+
+// jint parses a ZHA numeric field that may be a JSON number or a "0x.." string.
+func jint(raw json.RawMessage) int {
+	var num float64
+	if json.Unmarshal(raw, &num) == nil {
+		return int(num)
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		var v int64
+		if _, err := fmt.Sscanf(s, "0x%x", &v); err == nil {
+			return int(v)
+		}
+		if _, err := fmt.Sscanf(s, "%d", &v); err == nil {
+			return int(v)
+		}
+	}
+	return -1
+}
+func jints(raws []json.RawMessage) []int {
+	out := make([]int, 0, len(raws))
+	for _, r := range raws {
+		if v := jint(r); v >= 0 {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // Fetch connects, authenticates, and loads the ZHA device list once.
@@ -122,6 +167,29 @@ func (c *HAClient) Fetch(ctx context.Context) (int, error) {
 			c.Reg.Set(nwk, name)
 			if d.LQI != nil || d.RSSI != nil {
 				c.Reg.SetNet(nwk, d.LQI, d.RSSI) // nil fields stay absent, not 0
+			}
+			// Capabilities (endpoints + clusters) as ZHA discovered them.
+			info := DeviceInfo{Manufacturer: d.Manufacturer, Model: d.Model,
+				PowerSource: d.PowerSource, DeviceType: d.DeviceType}
+			for id, ep := range d.Signature.Endpoints {
+				info.Endpoints = append(info.Endpoints, Endpoint{
+					ID: jint(json.RawMessage(id)), Profile: jint(ep.Profile), Type: jint(ep.Type),
+					In: jints(ep.In), Out: jints(ep.Out)})
+			}
+			c.Reg.SetInfo(nwk, info)
+			// Neighbour table → traceroute topology.
+			var nbrs []Neighbor
+			for _, nb := range d.Neighbors {
+				if v, ok := parseNWK(nb.NWK); ok {
+					lqi := 0
+					if nb.LQI != nil {
+						lqi = *nb.LQI
+					}
+					nbrs = append(nbrs, Neighbor{NWK: v, Relationship: nb.Relationship, LQI: lqi})
+				}
+			}
+			if len(nbrs) > 0 {
+				c.Reg.SetNeighbors(nwk, nbrs)
 			}
 			n++
 		}

@@ -561,6 +561,151 @@ func clusterHex(v int) string {
 	return fmt.Sprintf("0x%04x", v)
 }
 
+// parseShortAddr parses "0x1234"/"1234" into a 16-bit short address.
+func parseShortAddr(s string) (uint16, bool) {
+	v, err := strconv.ParseUint(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(s)), "0x"), 16, 16)
+	if err != nil {
+		return 0, false
+	}
+	return uint16(v), true
+}
+
+// clusterNames maps common ZCL cluster ids to a friendly label for the UI.
+var clusterNames = map[int]string{
+	0x0000: "Basic", 0x0001: "Power Config", 0x0003: "Identify", 0x0004: "Groups",
+	0x0005: "Scenes", 0x0006: "On/Off", 0x0008: "Level Control", 0x0019: "OTA Upgrade",
+	0x0020: "Poll Control", 0x0102: "Window Covering", 0x0201: "Thermostat",
+	0x0300: "Color Control", 0x0400: "Illuminance", 0x0402: "Temperature",
+	0x0405: "Humidity", 0x0406: "Occupancy", 0x0500: "IAS Zone", 0x0702: "Metering",
+	0x0b04: "Electrical Meas", 0x0b05: "Diagnostics", 0xfc00: "Manufacturer",
+}
+
+// traceroute returns the path from the coordinator to a device with per-hop LQI,
+// preferring the coordinator's own neighbour table (ZHA) and falling back to the
+// sniffer's observed links.
+func (s *Server) traceroute(target uint16) ([]map[string]any, string, bool) {
+	name := func(a uint16) string {
+		n := ""
+		if s.Reg != nil {
+			n = s.Reg.NameFull(fmt.Sprintf("0x%04x", a))
+		}
+		if n == "" && a == 0 {
+			n = "Coordinator"
+		}
+		return n
+	}
+	hop := func(a uint16, lqi int, has bool) map[string]any {
+		h := map[string]any{"addr": fmt.Sprintf("0x%04x", a), "name": name(a)}
+		if has {
+			h["lqi"] = lqi
+		}
+		return h
+	}
+	// 1) ZHA neighbour parent-chain.
+	if s.Reg != nil {
+		nbrs := s.Reg.Neighbors()
+		if len(nbrs) > 0 {
+			parent := map[uint16]uint16{}
+			plqi := map[uint16]int{}
+			for dev, list := range nbrs {
+				for _, n := range list {
+					switch n.Relationship {
+					case "Child":
+						parent[n.NWK] = dev
+						plqi[n.NWK] = n.LQI
+					case "Parent":
+						parent[dev] = n.NWK
+						plqi[dev] = n.LQI
+					}
+				}
+			}
+			var chain []uint16
+			seen := map[uint16]bool{}
+			cur, complete := target, false
+			for i := 0; i < 32; i++ {
+				chain = append(chain, cur)
+				if cur == 0 {
+					complete = true
+					break
+				}
+				if seen[cur] {
+					break
+				}
+				seen[cur] = true
+				p, ok := parent[cur]
+				if !ok {
+					break
+				}
+				cur = p
+			}
+			if complete {
+				var hops []map[string]any
+				for i := len(chain) - 1; i >= 0; i-- {
+					a := chain[i]
+					l, has := plqi[a]
+					hops = append(hops, hop(a, l, has && a != 0))
+				}
+				return hops, "coordinator neighbour table (ZHA)", true
+			}
+		}
+	}
+	// 2) Fallback: BFS over the sniffer's observed links.
+	edges, _ := s.DB.Routing()["edges"].([]map[string]any)
+	adj := map[uint16][]uint16{}
+	lqiOf := map[[2]uint16]int{}
+	for _, e := range edges {
+		src, ok1 := parseShortAddr(fmt.Sprint(e["src"]))
+		dst, ok2 := parseShortAddr(fmt.Sprint(e["dst"]))
+		if !ok1 || !ok2 {
+			continue
+		}
+		adj[src] = append(adj[src], dst)
+		adj[dst] = append(adj[dst], src)
+		if l, ok := e["lqi"].(int64); ok {
+			lqiOf[[2]uint16{src, dst}] = int(l)
+			lqiOf[[2]uint16{dst, src}] = int(l)
+		}
+	}
+	prev := map[uint16]uint16{0: 0}
+	q := []uint16{0}
+	found := false
+	for len(q) > 0 && !found {
+		n := q[0]
+		q = q[1:]
+		for _, m := range adj[n] {
+			if _, ok := prev[m]; ok {
+				continue
+			}
+			prev[m] = n
+			if m == target {
+				found = true
+				break
+			}
+			q = append(q, m)
+		}
+	}
+	if !found {
+		return nil, "no path found — not enough observed links (connect Home Assistant, or capture longer)", false
+	}
+	var path []uint16
+	for c := target; ; c = prev[c] {
+		path = append([]uint16{c}, path...)
+		if c == 0 {
+			break
+		}
+	}
+	var hops []map[string]any
+	for i, a := range path {
+		if i == 0 {
+			hops = append(hops, hop(a, 0, false))
+			continue
+		}
+		l, has := lqiOf[[2]uint16{path[i-1], a}]
+		hops = append(hops, hop(a, l, has))
+	}
+	return hops, "observed links (sniffer)", true
+}
+
 // enrich fills name + network-reported signal (from HA) onto device rows. The
 // sniffer's own rssi/lqi stay as-is; net_lqi/net_rssi are the coordinator's view.
 func (s *Server) enrich(rows []map[string]any) []map[string]any {
@@ -626,6 +771,29 @@ func (s *Server) Handler() http.Handler {
 			s.enrich(nodes) // marks foreign nodes; the client colours/toggles them
 		}
 		writeJSON(w, rt)
+	})
+	// Device capabilities (endpoints/clusters/manufacturer/model/power) as the
+	// coordinator (ZHA) discovered them — no on-air interrogation needed.
+	mux.HandleFunc("/api/device_info", func(w http.ResponseWriter, r *http.Request) {
+		short, ok := parseShortAddr(r.URL.Query().Get("addr"))
+		if !ok || s.Reg == nil {
+			writeJSON(w, map[string]any{"error": "bad addr"})
+			return
+		}
+		info, has := s.Reg.Info(short)
+		writeJSON(w, map[string]any{"addr": fmt.Sprintf("0x%04x", short), "have": has, "info": info,
+			"clusters": clusterNames})
+	})
+	// Traceroute: the path from the coordinator to a device, with per-hop LQI.
+	mux.HandleFunc("/api/traceroute", func(w http.ResponseWriter, r *http.Request) {
+		short, ok := parseShortAddr(r.URL.Query().Get("addr"))
+		if !ok {
+			writeJSON(w, map[string]any{"error": "bad addr"})
+			return
+		}
+		hops, source, complete := s.traceroute(short)
+		writeJSON(w, map[string]any{"target": fmt.Sprintf("0x%04x", short),
+			"hops": hops, "source": source, "complete": complete})
 	})
 	mux.HandleFunc("/api/incidents", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, nz(s.DB.Incidents(200)))

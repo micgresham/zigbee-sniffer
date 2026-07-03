@@ -88,6 +88,11 @@ Your home base — three panels:
 - Edge colour = link quality **as heard by the sniffer**; a **dashed** line means we haven't yet
   observed that device's parent.
 
+**Device details** (click a device). Beyond signal/messages, the drawer shows **Capabilities**
+(endpoints + in/out clusters, manufacturer, model, power — pulled from the coordinator/ZHA, no
+on-air interrogation) and a **Path from coordinator** button that plots the route to the device
+hop-by-hop with per-hop LQI (from ZHA's neighbour table, or the sniffer's observed links).
+
 **Incidents.** Timestamped dropout events the host flags automatically: a device that was
 heard regularly then **went silent** past the threshold (with the channel's energy at that
 moment), and a **recovered** entry when it returns. Tune the silence threshold in **Config →

@@ -28,6 +28,8 @@ binary command frames (`set_channel`, `set_mode`, `ed_scan`, `set_key`).
 | GET | `/api/spectrum?from=&to=` | ED time-series for the waterfall + channel advice |
 | GET | `/api/networks` | every PAN id seen on-air (`networks[]`: `pan`, `channel`, `count`, `last_seen`, `label`) plus `ours` (your PAN) — see [networks.md](networks.md) |
 | GET | `/api/decode?hex=` | layer-by-layer decode of one frame (MAC/NWK/APS/ZCL + raw) for the inspector |
+| GET | `/api/device_info?addr=` | a device's capabilities (endpoints, in/out clusters, manufacturer, model, power) as ZHA discovered them |
+| GET | `/api/traceroute?addr=` | path from the coordinator to a device with per-hop LQI (ZHA neighbour table, else observed links) |
 | GET | `/api/export?what=frames&format=pcap` | download captured frames as a Wireshark pcap (LINKTYPE_IEEE802_15_4_TAP; RSSI/LQI/channel as TAP TLVs). `format` also = `csv`/`json` for any `what` |
 | POST | `/api/survey?active=&dwell=` | run a whole-band survey: hop channels 11–26 collecting PANs. `active=1` also TX's a beacon request per channel (needs firmware ≥ 0.26); `dwell` = ms/channel. Progress streams on `/ws` as `{"kind":"survey",...}` |
 | POST | `/api/monitor?channel=&dwell=` | watch a foreign network: default channel = paired Hue bridge, else busiest foreign PAN. Uses a spare/satellite radio continuously (`monitor:<ch>` role) if available, else a timed snapshot on the primary (`{"kind":"monitor",...}` on `/ws`) |

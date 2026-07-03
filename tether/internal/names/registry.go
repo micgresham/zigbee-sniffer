@@ -29,12 +29,69 @@ type Registry struct {
 	net   map[uint16]NetSig
 	byExt map[uint64]string // extended (IEEE) address -> name (e.g. from a Hue bridge)
 	extOf map[uint16]uint64 // short address -> its extended (IEEE) address (learned on-air)
+	info  map[uint16]DeviceInfo
+	nbr   map[uint16][]Neighbor // per-device neighbour table (from ZHA), for traceroute
+}
+
+// Endpoint describes one application endpoint and its clusters.
+type Endpoint struct {
+	ID      int   `json:"id"`
+	Profile int   `json:"profile"`
+	Type    int   `json:"device_type"`
+	In      []int `json:"in"`  // input (server) clusters
+	Out     []int `json:"out"` // output (client) clusters
+}
+
+// DeviceInfo is a device's capabilities as the coordinator (ZHA) discovered them.
+type DeviceInfo struct {
+	Manufacturer string     `json:"manufacturer"`
+	Model        string     `json:"model"`
+	PowerSource  string     `json:"power_source"`
+	DeviceType   string     `json:"device_type"`
+	Endpoints    []Endpoint `json:"endpoints"`
+}
+
+// Neighbor is one entry of a device's neighbour table (relationship + link LQI).
+type Neighbor struct {
+	NWK          uint16
+	Relationship string // "Parent" / "Child" / "Sibling"
+	LQI          int
+}
+
+// SetInfo/Info store a device's discovered capabilities.
+func (r *Registry) SetInfo(short uint16, i DeviceInfo) {
+	r.mu.Lock()
+	r.info[short] = i
+	r.mu.Unlock()
+}
+func (r *Registry) Info(short uint16) (DeviceInfo, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	i, ok := r.info[short]
+	return i, ok
+}
+
+// SetNeighbors records a device's neighbour table; Neighbors snapshots all of them.
+func (r *Registry) SetNeighbors(short uint16, ns []Neighbor) {
+	r.mu.Lock()
+	r.nbr[short] = ns
+	r.mu.Unlock()
+}
+func (r *Registry) Neighbors() map[uint16][]Neighbor {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[uint16][]Neighbor, len(r.nbr))
+	for k, v := range r.nbr {
+		out[k] = v
+	}
+	return out
 }
 
 // New returns an empty registry.
 func New() *Registry {
 	return &Registry{m: map[uint16]string{}, net: map[uint16]NetSig{},
-		byExt: map[uint64]string{}, extOf: map[uint16]uint64{}}
+		byExt: map[uint64]string{}, extOf: map[uint16]uint64{},
+		info: map[uint16]DeviceInfo{}, nbr: map[uint16][]Neighbor{}}
 }
 
 // SetShortExt records a short<->extended address mapping, learned from a frame

@@ -808,12 +808,31 @@ function bindGraphZoom(){const svg=document.getElementById("routing");
   window.addEventListener("mouseup",()=>{drag=null;dragNode=null;svg.style.cursor="grab";});}
 
 // ---- device detail drawer ----
+function capsHtml(di){
+  if(!di||!di.have||!di.info||(!di.info.endpoints&&!di.info.manufacturer))
+    return `<div class=dim style="font-size:11px">No capability data — connect Home Assistant (ZHA) so the coordinator can share this device's endpoints & clusters.</div>`;
+  const i=di.info,cn=di.clusters||{};
+  const hx=id=>"0x"+(+id).toString(16).padStart(4,"0");
+  const cl=id=>cn[id]?`${cn[id]} <span class=dim>${hx(id)}</span>`:hx(id);
+  let h=`<div class=kv>`;
+  if(i.manufacturer)h+=`<div>Manufacturer</div><div>${i.manufacturer}</div>`;
+  if(i.model)h+=`<div>Model</div><div>${i.model}</div>`;
+  if(i.power_source)h+=`<div>Power</div><div>${i.power_source}</div>`;
+  if(i.device_type)h+=`<div>Type</div><div>${i.device_type}</div>`;
+  h+=`</div>`;
+  (i.endpoints||[]).sort((a,b)=>a.id-b.id).forEach(ep=>{
+    h+=`<div style="margin-top:6px;font-size:11px"><b>Endpoint ${ep.id}</b> <span class=dim>profile ${hx(ep.profile)}</span></div>`;
+    if(ep.in&&ep.in.length)h+=`<div style="font-size:11px"><span class=dim>in&nbsp;&nbsp;</span>${ep.in.map(cl).join(", ")}</div>`;
+    if(ep.out&&ep.out.length)h+=`<div style="font-size:11px"><span class=dim>out&nbsp;</span>${ep.out.map(cl).join(", ")}</div>`;
+  });
+  return h;}
 async function showDetail(addr){if(!addr||addr==="—")return;selected=addr;
   const dev=devices.find(d=>d.addr===addr)||{addr};
   document.getElementById("d-title").textContent=(dev.name?dev.name+" · ":"")+addr;
   const msgs=await j(`/api/devices/${addr}/messages`)||[];
   const ph=(await j(`/api/probe_history?addr=${addr}`))||{history:[]};
   const phist=ph.history||[];
+  const di=(await j(`/api/device_info?addr=${addr}`))||{};
   document.getElementById("dbody").innerHTML=
    `<div class=kv><div>Address</div><div class=mono>${addr}</div>`+
    `<div>Name</div><div>${dev.name||(dev.mfg?`<span class=dim style="font-style:italic">${dev.mfg}</span> <span class=dim>(manufacturer — no device name)</span>`:'<span class=dim>unknown — add --zha-backup, --ha-host, or pair Hue</span>')}</div>`+
@@ -823,7 +842,11 @@ async function showDetail(addr){if(!addr||addr==="—")return;selected=addr;
    `<div>Raw sniffer LQI</div><div class=dim>${dev.last_lqi??'?'} <span class=dim>(C6 LQI reads low — prefer RSSI/quality)</span></div>`+
    `<div>Frames seen</div><div>${dev.count??0}</div>`+
    `<div>Channel</div><div>${dev.last_channel??'?'}</div></div>`+
-   `<h2 style="font-size:12px;color:var(--dim);text-transform:uppercase;display:flex;justify-content:space-between;align-items:center">Active test <button id="d-probe" style="font-size:11px;padding:2px 8px">Probe now ⚠</button></h2>`+
+   `<h2 style="font-size:12px;color:var(--dim);text-transform:uppercase;margin-top:14px">Capabilities <span class=dim style="text-transform:none;font-weight:400">(from coordinator / ZHA)</span></h2>`+
+   capsHtml(di)+
+   `<h2 style="font-size:12px;color:var(--dim);text-transform:uppercase;margin-top:14px;display:flex;justify-content:space-between;align-items:center">Path from coordinator <button id="d-trace" style="font-size:11px;padding:2px 8px">Trace</button></h2>`+
+   `<div id="d-trace-out" class=dim style="font-size:11px">click <b>Trace</b> to plot the route from the coordinator to this device.</div>`+
+   `<h2 style="font-size:12px;color:var(--dim);text-transform:uppercase;margin-top:14px;display:flex;justify-content:space-between;align-items:center">Active test <button id="d-probe" style="font-size:11px;padding:2px 8px">Probe now ⚠</button></h2>`+
    `<div class=dim style="font-size:11px;margin-bottom:6px">An ACK proves the device's radio is alive & on-channel right now — useful to confirm a "dropped" device. RSSI here is from the probing radio.</div>`+
    `<table><thead><tr><th>Time</th><th>Radio</th><th>Result</th><th>RSSI⌖</th></tr></thead><tbody id="d-probes">`+
    phist.slice(0,12).map(h=>`<tr><td class=dim>${fmtTime(h.ts)}</td><td>${h.radio}</td><td class="${h.acked?'good':'weak'}">${h.acked?'✓ ACK':'✗ no ACK'}</td><td>${h.acked?h.rssi:''}</td></tr>`).join("")+
@@ -836,6 +859,12 @@ async function showDetail(addr){if(!addr||addr==="—")return;selected=addr;
   if(pb)pb.onclick=async()=>{const p=document.getElementById("at-radio")?document.getElementById("at-radio").value:"";
     if(!p&&!await gateFn("probe"))return;
     post(`/api/probe?addr=${addr}${p?'&port='+encodeURIComponent(p):''}`).then(()=>setTimeout(()=>showDetail(addr),700));};
+  const tb=document.getElementById("d-trace");
+  if(tb)tb.onclick=async()=>{const out=document.getElementById("d-trace-out");out.textContent="tracing…";
+    const t=await j(`/api/traceroute?addr=${addr}`);
+    if(!t||!t.hops||!t.hops.length){out.innerHTML=`<span class=weak>${(t&&t.source)||"no path found"}</span>`;return;}
+    out.innerHTML=`<div class=dim style="margin-bottom:4px">via ${t.source} · ${t.hops.length} hop${t.hops.length>1?"s":""}</div>`+
+      t.hops.map((h,i)=>`<div style="padding:2px 0">${i===0?"📡":"&nbsp;&nbsp;".repeat(i)+"└→"} <b>${h.name||h.addr}</b> <span class="dim mono">${h.addr}</span>${h.lqi!=null?` · <span class="${lqiClass(h.lqi)}">LQI ${h.lqi}</span>`:""}</div>`).join("");};
   document.getElementById("drawer").classList.add("open");}
 document.getElementById("dclose").onclick=()=>{document.getElementById("drawer").classList.remove("open");selected=null;};
 
