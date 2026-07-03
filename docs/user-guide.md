@@ -206,7 +206,8 @@ Everything that isn't live capture:
   **Pair**. Names Hue devices and helps identify the Hue network in *Zigbee networks*. Runs
   alongside Home Assistant (both name sources at once). The key is stored encrypted.
 - **Raw command** — advanced: send an arbitrary framed command.
-- **Export** — download Devices / Frames / Incidents / Diagnostics / Spectrum as CSV or JSON.
+- **Export** — download Devices / Frames / Incidents / Diagnostics / Spectrum as CSV or JSON, or
+  **Frames → pcap** for **Wireshark** (802.15.4 TAP encapsulation, with per-frame RSSI/LQI/channel).
 - **Radios** — assign each connected C6 a **role** (see below), or set its radio-id.
 - **Firmware update (OTA)** — see [below](#firmware-updates-ota).
 

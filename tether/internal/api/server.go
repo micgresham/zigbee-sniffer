@@ -3,12 +3,14 @@ package api
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"hash/crc32"
 	"io"
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -156,6 +158,71 @@ type Server struct {
 
 // incidentSilenceDefault mirrors the detector's default when unset.
 const incidentSilenceDefault = 120
+
+// writePcapTAP writes captured frames as a classic pcap with linktype
+// LINKTYPE_IEEE802_15_4_TAP (283) — the modern encapsulation Wireshark uses,
+// carrying per-frame RSSI/LQI/channel as TAP TLVs alongside the raw MPDU. Rows
+// arrive newest-first (as stored); we emit them oldest-first.
+func writePcapTAP(w io.Writer, rows []map[string]any) {
+	gh := make([]byte, 24)
+	binary.LittleEndian.PutUint32(gh[0:], 0xa1b2c3d4) // magic
+	binary.LittleEndian.PutUint16(gh[4:], 2)          // version major
+	binary.LittleEndian.PutUint16(gh[6:], 4)          // version minor
+	binary.LittleEndian.PutUint32(gh[16:], 65535)     // snaplen
+	binary.LittleEndian.PutUint32(gh[20:], 283)       // LINKTYPE_IEEE802_15_4_TAP
+	w.Write(gh)
+	toI := func(v any) int {
+		switch n := v.(type) {
+		case int64:
+			return int(n)
+		case int:
+			return n
+		case float64:
+			return int(n)
+		}
+		return 0
+	}
+	for i := len(rows) - 1; i >= 0; i-- {
+		r := rows[i]
+		rawHex, _ := r["raw"].(string)
+		mpdu, err := hex.DecodeString(rawHex)
+		if err != nil || len(mpdu) == 0 {
+			continue
+		}
+		// TAP TLVs (each: type u16, len u16, value, padded to 4 bytes).
+		var tlvs []byte
+		addTLV := func(typ uint16, val []byte) {
+			h := make([]byte, 4)
+			binary.LittleEndian.PutUint16(h[0:], typ)
+			binary.LittleEndian.PutUint16(h[2:], uint16(len(val)))
+			tlvs = append(append(tlvs, h...), val...)
+			for len(tlvs)%4 != 0 {
+				tlvs = append(tlvs, 0)
+			}
+		}
+		addTLV(0, []byte{1}) // FCS type: 16-bit CRC present (MPDU includes FCS)
+		chv := make([]byte, 3)
+		binary.LittleEndian.PutUint16(chv[0:], uint16(toI(r["channel"]))) // channel + page 0
+		addTLV(3, chv)
+		rv := make([]byte, 4)
+		binary.LittleEndian.PutUint32(rv, math.Float32bits(float32(toI(r["rssi"])))) // RSS dBm
+		addTLV(1, rv)
+		addTLV(10, []byte{byte(toI(r["lqi"]))}) // LQI
+
+		tap := make([]byte, 4) // version 0, reserved 0, length
+		binary.LittleEndian.PutUint16(tap[2:], uint16(4+len(tlvs)))
+		pkt := append(append(tap, tlvs...), mpdu...)
+
+		tsF, _ := r["ts"].(float64)
+		rec := make([]byte, 16)
+		binary.LittleEndian.PutUint32(rec[0:], uint32(int64(tsF)))
+		binary.LittleEndian.PutUint32(rec[4:], uint32((tsF-math.Floor(tsF))*1e6))
+		binary.LittleEndian.PutUint32(rec[8:], uint32(len(pkt)))
+		binary.LittleEndian.PutUint32(rec[12:], uint32(len(pkt)))
+		w.Write(rec)
+		w.Write(pkt)
+	}
+}
 
 // writeCSV writes rows as CSV with a stable, sorted column header.
 func writeCSV(w io.Writer, rows []map[string]any) {
@@ -696,6 +763,12 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		ts := time.Now().Format("20060102-150405")
+		if r.URL.Query().Get("format") == "pcap" && (what == "frames" || what == "packets") {
+			w.Header().Set("Content-Type", "application/vnd.tcpdump.pcap")
+			w.Header().Set("Content-Disposition", "attachment; filename=zbsniff-"+ts+".pcap")
+			writePcapTAP(w, rows)
+			return
+		}
 		if r.URL.Query().Get("format") == "json" {
 			w.Header().Set("Content-Disposition", "attachment; filename=zbsniff-"+what+"-"+ts+".json")
 			writeJSON(w, nz(rows))

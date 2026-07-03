@@ -217,6 +217,7 @@ border-left:1px solid var(--line);transform:translateX(100%);transition:.2s;z-in
         <button data-exp="incidents">Incidents</button><button data-exp="diagnostics">Diag</button>
         <button data-exp="spectrum">Spectrum</button>
         <select id="exp-fmt"><option value="csv">CSV</option><option value="json">JSON</option></select>
+        <button id="exp-pcap" title="download captured frames as a Wireshark capture (802.15.4 TAP, with RSSI/LQI/channel)">Frames → pcap</button>
       </div></div>
     </div>
   </div>
@@ -938,6 +939,7 @@ on("cfg-silence-save",async()=>{const v=+document.getElementById("cfg-silence").
 document.querySelectorAll("[data-exp]").forEach(b=>b.onclick=()=>{
   const fmt=document.getElementById("exp-fmt").value;
   window.open(`/api/export?what=${b.dataset.exp}&format=${fmt}`,"_blank");});
+on("exp-pcap",()=>window.open("/api/export?what=frames&format=pcap","_blank"));
 on("rg-leaves",()=>{showLeaves=!showLeaves;
   document.getElementById("rg-leaves").classList.toggle("on",showLeaves);renderGraph();savePref("show_leaves",showLeaves?"1":"0");});
 on("rg-foreign",()=>{showForeign=!showForeign;
