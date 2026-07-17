@@ -665,13 +665,14 @@ async function loadDiagnostics(){const d=await j("/api/diagnostics");if(!d)retur
     savePref("dg_hidden",Object.keys(dgHidden).filter(k=>dgHidden[k]).join(","));loadDiagnostics();});
   const shown=d.filter(x=>!dgHidden[x.category]);
   const rank={critical:0,error:1,warning:2,notice:3,info:4};
-  shown.sort((a,b)=>(rank[a.severity]??9)-(rank[b.severity]??9));
+  shown.sort((a,b)=>((rank[a.severity]??9)-(rank[b.severity]??9))||((b.ts||0)-(a.ts||0)));
   document.getElementById("dg-cnt").textContent=shown.filter(x=>["critical","error","warning"].includes(x.severity)).length;
   dgShown=shown;
   document.getElementById("diagnostics").innerHTML=shown.map((x,i)=>
    `<div class="diag ${x.severity}" data-di="${i}" style="cursor:pointer">`+
    `<span class=sev>${x.severity}</span><span class=cat>${x.category}</span>`+
    `<span class=msg>${annotate(x.message)}</span>`+
+   `${x.ts?`<span class=dim style="font-size:11px;white-space:nowrap" title="${fmtTime(x.ts)}">${ageStr(x.ts)} ago</span>`:""}`+
    `${x.addr?`<span class="addr" data-addr="${x.addr}" title="${x.addr}">${addrLabel(x.addr)}</span>`:""}</div>`).join("")
    ||'<div class=dim>nothing to show (all categories hidden)</div>';
   document.querySelectorAll("#diagnostics .diag").forEach(el=>el.onclick=ev=>{
@@ -685,6 +686,7 @@ async function showDiag(d){if(!d)return;selected=null;
   let h=`<div class=kv>`+
     `<div>Severity</div><div><span class="diag ${d.severity}" style="display:inline-block;padding:2px 10px;border-radius:6px"><span class=sev>${d.severity}</span></span></div>`+
     `<div>Category</div><div>${d.category}</div>`+
+    `${d.ts?`<div>When</div><div>${fmtTime(d.ts)} <span class=dim>(${ageStr(d.ts)} ago)</span></div>`:""}`+
     `<div>Details</div><div>${annotate(d.message)}</div>`;
   if(d.addr){const dev=devices.find(x=>x.addr===d.addr)||{addr:d.addr};
     h+=`<div>Device</div><div class=mono>${dev.name?dev.name+' · ':''}${d.addr}</div>`+

@@ -634,10 +634,13 @@ func routeFailureClusterFindings(db *sql.DB, edByCh map[int]int) []map[string]an
 	}
 
 	var out []map[string]any
-	add := func(sev, cat, msg string, addr int) {
+	add := func(sev, cat, msg string, addr int, ts float64) {
 		m := map[string]any{"severity": sev, "category": cat, "message": msg}
 		if addr >= 0 {
 			m["addr"] = fmt.Sprintf("0x%04x", uint16(addr))
+		}
+		if ts > 0 {
+			m["ts"] = ts
 		}
 		out = append(out, m)
 	}
@@ -677,12 +680,12 @@ func routeFailureClusterFindings(db *sql.DB, edByCh map[int]int) []map[string]an
 			rep := onlyIntKey(reporters)
 			add(sev, "Router health", fmt.Sprintf(
 				"router 0x%04x reported %d route failures (\"%s\") for %d different devices over %s — the shared cause is likely this router itself (its uplink, load, or firmware), not %d unrelated device faults",
-				uint16(rep), len(cl), reason, len(targets), humanDur(dur), len(targets)), rep)
+				uint16(rep), len(cl), reason, len(targets), humanDur(dur), len(targets)), rep, cl[len(cl)-1].ts)
 		case len(targets) == 1:
 			tgt := onlyIntKey(targets)
 			add(sev, "Route failure", fmt.Sprintf(
 				"%d route failures (\"%s\") over %s — this device specifically is hard to reach; re-pair it or add a router nearer to it",
-				len(cl), reason, humanDur(dur)), tgt)
+				len(cl), reason, humanDur(dur)), tgt, cl[len(cl)-1].ts)
 		default:
 			note := ""
 			if noisiestCh > -75 {
@@ -690,7 +693,7 @@ func routeFailureClusterFindings(db *sql.DB, edByCh map[int]int) []map[string]an
 			}
 			add(sev, "Mesh event", fmt.Sprintf(
 				"%d route failures across %d devices and %d routers within %s — looks like a shared event (congestion, interference, or a coordinator hiccup), not %d independent device faults%s",
-				len(cl), len(targets), len(reporters), humanDur(dur), len(targets), note), -1)
+				len(cl), len(targets), len(reporters), humanDur(dur), len(targets), note), -1, cl[len(cl)-1].ts)
 		}
 		shown++
 	}
@@ -1123,10 +1126,13 @@ func (d *DB) Diagnostics(ourPan int) []map[string]any {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	var out []map[string]any
-	add := func(sev, cat, msg string, addr int) {
+	add := func(sev, cat, msg string, addr int, ts float64) {
 		m := map[string]any{"severity": sev, "category": cat, "message": msg}
 		if addr >= 0 {
 			m["addr"] = fmt.Sprintf("0x%04x", uint16(addr))
+		}
+		if ts > 0 {
+			m["ts"] = ts
 		}
 		out = append(out, m)
 	}
@@ -1156,7 +1162,7 @@ func (d *DB) Diagnostics(ourPan int) []map[string]any {
 			ago := humanDur(float64(time.Now().Unix()) - lastSeen)
 			add("critical", "Address conflict", fmt.Sprintf(
 				"%d× NWK short-address conflict, most recently %s ago — the coordinator assigned this address to more than one device at some point, which alone can cause a device to randomly vanish/reappear; re-pair it, or if this shows up on several devices, restart the coordinator's address table",
-				c, ago), addr)
+				c, ago), addr, lastSeen)
 		})
 	// Every other route failure: root-cause clustering instead of one alert
 	// per device — see routeFailureClusterFindings.
@@ -1171,37 +1177,41 @@ func (d *DB) Diagnostics(ourPan int) []map[string]any {
 	// Foreign Zigbee networks — other PAN ids seen (notice). If our PAN is
 	// unknown (no ZHA backup), assume the busiest PAN is ours and flag the rest.
 	panRow := 0
-	q(`SELECT pan,count,channel FROM pans ORDER BY count DESC`, func(r *sql.Rows) {
+	q(`SELECT pan,count,channel,last_seen FROM pans ORDER BY count DESC`, func(r *sql.Rows) {
 		var pan, c, ch int
-		r.Scan(&pan, &c, &ch)
+		var lastSeen float64
+		r.Scan(&pan, &c, &ch, &lastSeen)
 		defer func() { panRow++ }()
 		mine := (ourPan > 0 && pan == ourPan) || (ourPan == 0 && panRow == 0)
 		if mine || c < 3 {
 			return
 		}
-		add("notice", "Foreign network", fmt.Sprintf("PAN 0x%04x seen on ch %d (%d frames) — another Zigbee/Thread network sharing this channel; a possible interference source", uint16(pan), ch, c), -1)
+		add("notice", "Foreign network", fmt.Sprintf("PAN 0x%04x seen on ch %d (%d frames) — another Zigbee/Thread network sharing this channel; a possible interference source", uint16(pan), ch, c), -1, lastSeen)
 	})
 	// Weak links — INFO: this is only the sniffer's vantage, not the mesh link.
-	q(`SELECT src,dst,last_lqi FROM links WHERE last_lqi < 50 AND count>=2 ORDER BY last_lqi ASC LIMIT 30`,
+	q(`SELECT src,dst,last_lqi,last_seen FROM links WHERE last_lqi < 50 AND count>=2 ORDER BY last_lqi ASC LIMIT 30`,
 		func(r *sql.Rows) {
 			var src, dst, lqi int
-			r.Scan(&src, &dst, &lqi)
-			add("info", "Weak link", fmt.Sprintf("0x%04x→0x%04x LQI %d as heard by the SNIFFER — may be fine on the mesh; compare the device's Net LQI", uint16(src), uint16(dst), lqi), src)
+			var lastSeen float64
+			r.Scan(&src, &dst, &lqi, &lastSeen)
+			add("info", "Weak link", fmt.Sprintf("0x%04x→0x%04x LQI %d as heard by the SNIFFER — may be fine on the mesh; compare the device's Net LQI", uint16(src), uint16(dst), lqi), src, lastSeen)
 		})
 	// Far from sniffer — INFO (sniffer's distance, not the device's link).
-	q(`SELECT addr,last_rssi FROM devices WHERE last_rssi < -85 AND count>=2 ORDER BY last_rssi ASC LIMIT 30`,
+	q(`SELECT addr,last_rssi,last_seen FROM devices WHERE last_rssi < -85 AND count>=2 ORDER BY last_rssi ASC LIMIT 30`,
 		func(r *sql.Rows) {
 			var addr, rssi int
-			r.Scan(&addr, &rssi)
-			add("info", "Far from sniffer", fmt.Sprintf("RSSI %d dBm at the SNIFFER — the sniffer's distance to the device, not its link to its router. Check Net LQI (HA) or probe from a nearer radio", rssi), addr)
+			var lastSeen float64
+			r.Scan(&addr, &rssi, &lastSeen)
+			add("info", "Far from sniffer", fmt.Sprintf("RSSI %d dBm at the SNIFFER — the sniffer's distance to the device, not its link to its router. Check Net LQI (HA) or probe from a nearer radio", rssi), addr, lastSeen)
 		})
 	// Channel noise (latest ED per channel) — warning.
-	q(`SELECT channel, ed_dbm FROM ed_samples WHERE rowid IN (SELECT MAX(rowid) FROM ed_samples GROUP BY channel)`,
+	q(`SELECT channel, ed_dbm, ts FROM ed_samples WHERE rowid IN (SELECT MAX(rowid) FROM ed_samples GROUP BY channel)`,
 		func(r *sql.Rows) {
 			var ch, ed int
-			r.Scan(&ch, &ed)
+			var ts float64
+			r.Scan(&ch, &ed, &ts)
 			if ed > -75 {
-				add("warning", "Channel noise", fmt.Sprintf("channel %d energy %d dBm — busy; consider a quieter Zigbee channel (15/20/25)", ch, ed), -1)
+				add("warning", "Channel noise", fmt.Sprintf("channel %d energy %d dBm — busy; consider a quieter Zigbee channel (15/20/25)", ch, ed), -1, ts)
 			}
 		})
 	now := float64(time.Now().Unix())
@@ -1242,7 +1252,7 @@ func (d *DB) Diagnostics(ourPan int) []map[string]any {
 		if len(group) >= 3 {
 			add(sev, "Silent device", fmt.Sprintf(
 				"%d devices all went silent within %s of each other, oldest %dm ago — likely a shared cause (capture dropout, interference, or a coordinator hiccup), not %d independent device failures; check those first before chasing individual devices",
-				len(group), humanDur(group[len(group)-1].ls-group[0].ls), int(maxAge/60), len(group)), -1)
+				len(group), humanDur(group[len(group)-1].ls-group[0].ls), int(maxAge/60), len(group)), -1, group[len(group)-1].ls)
 		} else {
 			for _, sd := range group {
 				age := now - sd.ls
@@ -1250,7 +1260,7 @@ func (d *DB) Diagnostics(ourPan int) []map[string]any {
 				if age > 7200 {
 					s = "warning"
 				}
-				add(s, "Silent device", fmt.Sprintf("not heard for %dm (was chatty: %d frames) — a candidate for the dropout you're chasing; power-cycle test or active-probe it", int(age/60), sd.c), sd.addr)
+				add(s, "Silent device", fmt.Sprintf("not heard for %dm (was chatty: %d frames) — a candidate for the dropout you're chasing; power-cycle test or active-probe it", int(age/60), sd.c), sd.addr, sd.ls)
 			}
 		}
 		i = j
@@ -1281,7 +1291,7 @@ func (d *DB) Diagnostics(ourPan int) []map[string]any {
 				}
 				add(sev, "Rejoin", fmt.Sprintf(
 					"%d rejoin events in the last 24h, most recently %s ago — losing and re-establishing its network connection repeatedly, not just going quiet",
-					c, humanDur(now-lastTs)), addr)
+					c, humanDur(now-lastTs)), addr, lastTs)
 			}
 		}
 	}
@@ -1290,15 +1300,15 @@ func (d *DB) Diagnostics(ourPan int) []map[string]any {
 	var coordSeen float64
 	d.db.QueryRow(`SELECT last_seen FROM devices WHERE addr=0`).Scan(&coordSeen)
 	if coordSeen == 0 {
-		add("warning", "Coordinator", "no coordinator (0x0000) traffic seen — are you on the right channel?", 0)
+		add("warning", "Coordinator", "no coordinator (0x0000) traffic seen — are you on the right channel?", 0, 0)
 	} else if now-coordSeen > 300 {
-		add("warning", "Coordinator", fmt.Sprintf("no coordinator traffic for %dm — capture may be stalled or off-channel", int((now-coordSeen)/60)), 0)
+		add("warning", "Coordinator", fmt.Sprintf("no coordinator traffic for %dm — capture may be stalled or off-channel", int((now-coordSeen)/60)), 0, coordSeen)
 	}
 	// Decryption hint — NWK payloads seen but nothing decrypted (no/incorrect key).
 	var pkts, dec int
 	d.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(decrypted),0) FROM packets`).Scan(&pkts, &dec)
 	if pkts > 200 && dec == 0 {
-		add("info", "Decryption", "no frames decrypted — set the network key in Config to decode payloads (addresses still work without it)", -1)
+		add("info", "Decryption", "no frames decrypted — set the network key in Config to decode payloads (addresses still work without it)", -1, 0)
 	}
 	// HA/zigpy log entries — mesh-wide, so entries about the radio/transport
 	// layer itself (no single device involved, e.g. a UART framing error)
@@ -1325,10 +1335,10 @@ func (d *DB) Diagnostics(ourPan int) []map[string]any {
 			if count > 1 {
 				countNote = fmt.Sprintf(" (×%d)", count)
 			}
-			add(sev, "HA/zigpy log", fmt.Sprintf("%s%s — %s (%s)", message, countNote, humanDur(now-ts)+" ago", logger), addr)
+			add(sev, "HA/zigpy log", fmt.Sprintf("%s%s — %s (%s)", message, countNote, humanDur(now-ts)+" ago", logger), addr, ts)
 		})
 	if len(out) == 0 {
-		add("info", "All clear", "no link/route/signal issues detected yet — keep capturing", -1)
+		add("info", "All clear", "no link/route/signal issues detected yet — keep capturing", -1, 0)
 	}
 	return out
 }
