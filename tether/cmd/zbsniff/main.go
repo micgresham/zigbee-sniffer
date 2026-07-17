@@ -39,7 +39,7 @@ import (
 
 // hostVersion is the zbsniff host app version (bump on release; can also be
 // overridden at build time with -ldflags "-X main.hostVersion=…").
-var hostVersion = "1.0.0"
+var hostVersion = "1.0.1"
 
 const author = "M. Gresham"
 
