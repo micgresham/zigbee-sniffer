@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -43,9 +44,25 @@ func WSURLFromHost(h string) string {
 // HAClient pulls ZHA device names from the Home Assistant WebSocket API.
 // url like ws://homeassistant.local:8123/api/websocket
 type HAClient struct {
-	URL   string
-	Token string
-	Reg   *Registry
+	URL     string
+	Token   string
+	Reg     *Registry
+	LogSink func([]HALogEntry) // optional: receives ZHA/zigpy-sourced system-log entries each Fetch
+}
+
+// HALogEntry is one entry from HA's own system_log/list (Settings > Logs) —
+// its Python-level warnings/errors, filtered to ZHA/zigpy-sourced ones. This
+// is the layer a passive Zigbee sniffer can't see: a command that never made
+// it onto the air, a timeout waiting for a response, an exception inside the
+// integration — all invisible on the RF side, where nothing looks wrong.
+type HALogEntry struct {
+	Logger        string   `json:"name"`
+	Message       []string `json:"message"`
+	Level         string   `json:"level"`
+	Timestamp     float64  `json:"timestamp"`
+	Exception     string   `json:"exception"`
+	Count         int      `json:"count"`
+	FirstOccurred float64  `json:"first_occurred"`
 }
 
 type haDevice struct {
@@ -59,6 +76,7 @@ type haDevice struct {
 	Model         string          `json:"model"`
 	PowerSource   string          `json:"power_source"`
 	DeviceType    string          `json:"device_type"`
+	Available     *bool           `json:"available"`
 	Signature     struct {
 		Endpoints map[string]struct {
 			Profile json.RawMessage   `json:"profile_id"`
@@ -72,6 +90,21 @@ type haDevice struct {
 		Relationship string          `json:"relationship"`
 		LQI          *int            `json:"lqi"`
 	} `json:"neighbors"`
+}
+
+// haRegDevice is one entry from HA's config/device_registry/list — a separate,
+// core-HA concept from a ZHA device (haDevice above): this is what carries the
+// area/room assignment. Cross-referenced to a ZHA device via Identifiers,
+// which for a Zigbee device is [["zha", "<ieee>"]].
+type haRegDevice struct {
+	AreaID      string      `json:"area_id"`
+	Identifiers [][2]string `json:"identifiers"`
+}
+
+// haArea is one entry from HA's config/area_registry/list.
+type haArea struct {
+	ID   string `json:"area_id"`
+	Name string `json:"name"`
 }
 
 // jint parses a ZHA numeric field that may be a JSON number or a "0x.." string.
@@ -164,13 +197,35 @@ func (c *HAClient) Fetch(ctx context.Context) (int, error) {
 			if name == "" {
 				name = d.Name
 			}
+			// Some ZHA entries (often unquirked or partially-supported
+			// devices — commonly bare repeaters/range extenders) report both
+			// name fields blank. Manufacturer+Model is still far more useful
+			// than falling all the way back to a bare IEEE suffix.
+			if name == "" {
+				name = strings.TrimSpace(d.Manufacturer + " " + d.Model)
+			}
 			c.Reg.Set(nwk, name)
+			// Also key the name by the device's IEEE (stable across a network
+			// rejoin, unlike its 16-bit NWK short address — see SetExt). Without
+			// this, a device that gets a new short address after rejoining
+			// resolves to nothing until the NEXT HA fetch happens to report it
+			// under the new address too; keying by IEEE here plus the on-air
+			// short->IEEE learning in main.go's learnExt() means it resolves
+			// immediately via NameFull()'s ext fallback instead.
+			if clean := strings.NewReplacer(":", "", "-", "", " ", "").Replace(d.IEEE); len(clean) == 16 {
+				if ext, err := strconv.ParseUint(clean, 16, 64); err == nil {
+					c.Reg.SetExt(ext, name)
+				}
+			}
 			if d.LQI != nil || d.RSSI != nil {
 				c.Reg.SetNet(nwk, d.LQI, d.RSSI) // nil fields stay absent, not 0
 			}
 			// Capabilities (endpoints + clusters) as ZHA discovered them.
 			info := DeviceInfo{Manufacturer: d.Manufacturer, Model: d.Model,
 				PowerSource: d.PowerSource, DeviceType: d.DeviceType}
+			if d.Available != nil {
+				info.Available, info.HasAvailable = *d.Available, true
+			}
 			for id, ep := range d.Signature.Endpoints {
 				info.Endpoints = append(info.Endpoints, Endpoint{
 					ID: jint(json.RawMessage(id)), Profile: jint(ep.Profile), Type: jint(ep.Type),
@@ -192,6 +247,91 @@ func (c *HAClient) Fetch(ctx context.Context) (int, error) {
 				c.Reg.SetNeighbors(nwk, nbrs)
 			}
 			n++
+		}
+		// Best-effort: each device's HA area/room, so the routing graph can
+		// label nodes with room names the way HA's own network map does. This
+		// is a separate HA-core concept (device registry + area registry) from
+		// ZHA's own device list above, needing its own two requests. Not fatal
+		// if either fails (older HA core, or a token missing the scope) — the
+		// device names/capabilities already fetched above are the essential
+		// part; area labels are cosmetic.
+		readResult := func() (map[string]any, error) {
+			for {
+				msg, err := read()
+				if err != nil {
+					return nil, err
+				}
+				if msg["type"] == "result" {
+					return msg, nil
+				}
+			}
+		}
+		if err := write(map[string]any{"id": 2, "type": "config/device_registry/list"}); err == nil {
+			if msg, err := readResult(); err == nil {
+				if ok, _ := msg["success"].(bool); ok {
+					raw, _ := json.Marshal(msg["result"])
+					var devReg []haRegDevice
+					json.Unmarshal(raw, &devReg)
+					if len(devReg) > 0 {
+						if err := write(map[string]any{"id": 3, "type": "config/area_registry/list"}); err == nil {
+							if msg, err := readResult(); err == nil {
+								if ok, _ := msg["success"].(bool); ok {
+									raw, _ := json.Marshal(msg["result"])
+									var areas []haArea
+									json.Unmarshal(raw, &areas)
+									areaName := make(map[string]string, len(areas))
+									for _, a := range areas {
+										areaName[a.ID] = a.Name
+									}
+									for _, dr := range devReg {
+										name := areaName[dr.AreaID]
+										if name == "" {
+											continue
+										}
+										for _, ident := range dr.Identifiers {
+											if len(ident) != 2 || ident[0] != "zha" {
+												continue
+											}
+											clean := strings.NewReplacer(":", "", "-", "", " ", "").Replace(ident[1])
+											if len(clean) != 16 {
+												continue
+											}
+											if ext, err := strconv.ParseUint(clean, 16, 64); err == nil {
+												c.Reg.SetArea(ext, name)
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		// HA's own system log (Settings > Logs), filtered to ZHA/zigpy-sourced
+		// entries — same best-effort treatment as area labels above: not fatal
+		// if it fails, the device names/capabilities already fetched are the
+		// essential part.
+		if c.LogSink != nil {
+			if err := write(map[string]any{"id": 4, "type": "system_log/list"}); err == nil {
+				if msg, err := readResult(); err == nil {
+					if ok, _ := msg["success"].(bool); ok {
+						raw, _ := json.Marshal(msg["result"])
+						var entries []HALogEntry
+						json.Unmarshal(raw, &entries)
+						var relevant []HALogEntry
+						for _, e := range entries {
+							lname := strings.ToLower(e.Logger)
+							if strings.Contains(lname, "zha") || strings.Contains(lname, "zigpy") {
+								relevant = append(relevant, e)
+							}
+						}
+						if len(relevant) > 0 {
+							c.LogSink(relevant)
+						}
+					}
+				}
+			}
 		}
 		return n, nil
 	}
@@ -219,12 +359,15 @@ type HAManager struct {
 	cancel  context.CancelFunc
 	status  map[string]any
 	refresh chan struct{}
+	logSink func([]HALogEntry)
 }
 
-// NewHAManager creates a manager bound to a name registry.
-func NewHAManager(reg *Registry) *HAManager {
+// NewHAManager creates a manager bound to a name registry. logSink (may be
+// nil) receives ZHA/zigpy-sourced HA system-log entries on every fetch cycle
+// (currently every 30s — see Connect) for the caller to persist/correlate.
+func NewHAManager(reg *Registry, logSink func([]HALogEntry)) *HAManager {
 	return &HAManager{reg: reg, status: map[string]any{"connected": false},
-		refresh: make(chan struct{}, 1)}
+		refresh: make(chan struct{}, 1), logSink: logSink}
 }
 
 // Refresh triggers an immediate re-fetch from the coordinator (ZHA), refreshing
@@ -258,7 +401,7 @@ func (m *HAManager) Connect(url, token string) {
 	m.set(map[string]any{"connected": false, "url": url, "state": "connecting"})
 
 	go func() {
-		client := &HAClient{URL: url, Token: token, Reg: m.reg}
+		client := &HAClient{URL: url, Token: token, Reg: m.reg, LogSink: m.logSink}
 		for {
 			n, err := client.Fetch(ctx)
 			if err != nil {

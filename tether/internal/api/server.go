@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"sort"
@@ -23,6 +24,7 @@ import (
 
 	"zbsniff/internal/config"
 	"zbsniff/internal/decode"
+	"zbsniff/internal/demo"
 	"zbsniff/internal/logbuf"
 	"zbsniff/internal/names"
 	"zbsniff/internal/proto"
@@ -143,8 +145,11 @@ type Server struct {
 	Logs  *logbuf.Buf      // host log ring
 	Web   []byte           // embedded index.html
 
-	SendTo func(port string, b []byte) bool // per-radio command send ("" = broadcast)
-	Radios *radios.Tracker                  // connected dongle identities
+	SendTo    func(port string, b []byte) bool // per-radio command send ("" = broadcast)
+	Radios    *radios.Tracker                  // connected dongle identities
+	Watch     *WatchSet                        // addresses flagged for join/rejoin activity
+	OtaActive *atomic.Bool                     // true while an OTA transfer is in flight (see /api/ota) — tells the host's liveness watchdog not to force a reconnect and abort it
+	OtaProg   *OtaProgress                     // last acknowledged OTA_STATUS "received" per target — see /api/ota's flow-control gate
 
 	SaveConfig func(func(*config.Config)) // persist settings to the config file
 	SetRole    func(radioID int, role string) // assign a radio's function
@@ -155,6 +160,10 @@ type Server struct {
 	Silence    func() int                      // current incident silence threshold (seconds)
 	Channel    func() int                      // configured capture channel (for restore after a scan)
 	HopDwell   func() int                      // configured hop dwell ms (0 = pinned)
+
+	DemoActive         *atomic.Bool // true once demo mode (simulated data) is running
+	NoHardwareDetected *atomic.Bool // true once the hardware search has gone a while with nothing found — the UI offers Retry/Enter Demo Mode rather than switching automatically
+	EnterDemo          func()       // switches to demo mode (idempotent)
 }
 
 // incidentSilenceDefault mirrors the detector's default when unset.
@@ -379,6 +388,41 @@ func (s *Server) sendFnTo(port string, frames ...[]byte) {
 	s.cmd(frames...)
 }
 
+// A relayed radio (a satellite reached over SPI, sharing the primary's port —
+// see docs/multi-radio.md) can't be commanded with the plain per-port messages
+// below: those always land on the port's own local radio. startOn/stopOn/
+// setChannelOn pick the CMD_SAT_* wire commands instead when that's the case.
+func (s *Server) relayed(port string, radioID int) bool {
+	return s.Radios != nil && s.Radios.IsRelayed(port, radioID)
+}
+
+func (s *Server) startOn(port string, radioID int) {
+	if s.relayed(port, radioID) {
+		s.SendTo(port, proto.CmdSatStartMsg(byte(radioID)))
+		return
+	}
+	s.sendFnTo(port, proto.CmdSetModeMsg(proto.ModeCapture), proto.CmdStartMsg())
+}
+
+func (s *Server) stopOn(port string, radioID int) {
+	if s.relayed(port, radioID) {
+		s.SendTo(port, proto.CmdSatStopMsg(byte(radioID)))
+		return
+	}
+	s.sendFnTo(port, proto.CmdStopMsg())
+}
+
+// setChannelOn pins one specific radio to a channel — a relayed satellite
+// moves independently of the primary's own channel (e.g. a multi-channel
+// survey), while the primary's own local radio uses the plain global command.
+func (s *Server) setChannelOn(port string, radioID int, ch byte) {
+	if s.relayed(port, radioID) {
+		s.SendTo(port, proto.CmdSatSetChannelMsg(byte(radioID), ch))
+		return
+	}
+	s.sendFnTo(port, proto.CmdSetChannelMsg(ch))
+}
+
 // runSurvey hops every Zigbee channel, capturing briefly on each so foreign
 // networks on other channels get recorded in the pans table. When active is set
 // it also transmits a beacon request per channel, soliciting replies from even
@@ -566,6 +610,18 @@ func clusterHex(v int) string {
 	return fmt.Sprintf("0x%04x", v)
 }
 
+// ieeeHex formats an extended (IEEE) address the way HA/zigpy conventionally
+// display and log it: colon-separated big-endian bytes, e.g.
+// "00:12:4b:00:11:22:33:44" — used to match this device's own log lines.
+func ieeeHex(ext uint64) string {
+	h := fmt.Sprintf("%016x", ext)
+	parts := make([]string, 8)
+	for i := 0; i < 8; i++ {
+		parts[i] = h[i*2 : i*2+2]
+	}
+	return strings.Join(parts, ":")
+}
+
 // parseShortAddr parses "0x1234"/"1234" into a 16-bit short address.
 func parseShortAddr(s string) (uint16, bool) {
 	v, err := strconv.ParseUint(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(s)), "0x"), 16, 16)
@@ -713,6 +769,44 @@ func (s *Server) traceroute(target uint16) ([]map[string]any, string, bool) {
 
 // enrich fills name + network-reported signal (from HA) onto device rows. The
 // sniffer's own rssi/lqi stay as-is; net_lqi/net_rssi are the coordinator's view.
+// latestEdgePerSrc keeps one edge per src — preferring the physical MAC-layer
+// hop (the true next-hop neighbor) over an NWK-layer logical pair, and only
+// using recency to break ties within the same tier. This matters: the NWK
+// src/dst pair is the packet's ultimate origin/destination and stays IDENTICAL
+// across every hop of a multi-hop route, so it never reveals an intermediate
+// router — and NWK frames are far more frequent than a specific MAC hop being
+// directly overheard, so naively picking "whichever refreshed most recently"
+// (see below) would almost always pick the NWK pair and permanently mask real
+// routers even when the mesh is genuinely routing through them. Within the
+// same tier, a device that has since re-routed through a new next-hop still
+// correctly drops its stale edge in favor of the newer one. The underlying
+// link history (counts, all past edges, both layers) is untouched in the DB —
+// this only filters what the graph renders; export still sees the full
+// history via DB.Routing() directly.
+func latestEdgePerSrc(edges []map[string]any) []map[string]any {
+	better := func(cur, e map[string]any) bool { // does e beat cur?
+		curMac, eMac := cur["layer"] == "mac", e["layer"] == "mac"
+		if curMac != eMac {
+			return eMac
+		}
+		curTS, _ := cur["last_seen"].(float64)
+		eTS, _ := e["last_seen"].(float64)
+		return eTS > curTS
+	}
+	latest := map[string]map[string]any{} // src -> its preferred edge
+	for _, e := range edges {
+		src, _ := e["src"].(string)
+		if cur, ok := latest[src]; !ok || better(cur, e) {
+			latest[src] = e
+		}
+	}
+	out := make([]map[string]any, 0, len(latest))
+	for _, e := range latest {
+		out = append(out, e)
+	}
+	return out
+}
+
 func (s *Server) enrich(rows []map[string]any) []map[string]any {
 	if s.Reg == nil {
 		return rows
@@ -734,6 +828,22 @@ func (s *Server) enrich(rows []map[string]any) []map[string]any {
 		// Manufacturer (OUI) fallback shown when no name is available.
 		if mfg := s.Reg.Mfg(addr); mfg != "" {
 			r["mfg"] = mfg
+		}
+		// Coordinator/Router/EndDevice as ZHA reported it — lets the graph use
+		// HA's own role instead of guessing from observed edge degree.
+		if dt := s.Reg.DeviceType(addr); dt != "" {
+			r["device_type"] = dt
+		}
+		// HA's room/area assignment, for the graph's second label line.
+		if area := s.Reg.Area(addr); area != "" {
+			r["area"] = area
+		}
+		// HA's live reachability view — testing whether "offline in HA" tracks
+		// with the unnamed-device cases (HA's own device page still shows a
+		// name/manufacturer for offline devices normally, so this is mostly a
+		// diagnostic to confirm or rule that out, not an expected root cause).
+		if avail, known := s.Reg.Available(addr); known {
+			r["ha_available"] = avail
 		}
 		if net, ok := s.Reg.Net(addr); ok {
 			if net.HasLQI {
@@ -774,6 +884,9 @@ func (s *Server) Handler() http.Handler {
 		rt := s.DB.Routing()
 		if nodes, ok := rt["nodes"].([]map[string]any); ok {
 			s.enrich(nodes) // marks foreign nodes; the client colours/toggles them
+		}
+		if edges, ok := rt["edges"].([]map[string]any); ok {
+			rt["edges"] = latestEdgePerSrc(edges) // drop superseded routes from the live tree
 		}
 		writeJSON(w, rt)
 	})
@@ -860,6 +973,52 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/incidents", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, nz(s.DB.Incidents(200)))
 	})
+	// Device analysis: every record the store holds about one device (full
+	// incident history, route failures, active-probe results, RSSI/LQI trend)
+	// plus rule-based findings on why it might be going unresponsive — and,
+	// if HA is connected, its own ZHA/zigpy log entries mentioning this
+	// device: the layer a passive sniffer can't see (a command that never
+	// made it onto the air, a timeout, an exception inside the integration).
+	mux.HandleFunc("/api/device_analysis", func(w http.ResponseWriter, r *http.Request) {
+		short, ok := parseShortAddr(r.URL.Query().Get("addr"))
+		if !ok {
+			writeJSON(w, map[string]any{"error": "bad addr"})
+			return
+		}
+		analysis := s.DB.DeviceAnalysis(int(short))
+		addrHex := fmt.Sprintf("0x%04x", short)
+		needles := []string{addrHex}
+		if s.Reg != nil {
+			if name := s.Reg.NameFull(addrHex); name != "" {
+				needles = append(needles, name)
+			}
+			if ext, ok := s.Reg.ExtOf(short); ok {
+				needles = append(needles, ieeeHex(ext))
+			}
+		}
+		logs := nz(s.DB.HALogsFor(needles, 50))
+		analysis["ha_logs"] = logs
+		// ERROR/WARNING entries are exactly the "why" a device analysis is
+		// for — fold them into findings alongside the RF-derived ones.
+		findings, _ := analysis["findings"].([]map[string]any)
+		for _, l := range logs {
+			lvl, _ := l["level"].(string)
+			if lvl != "ERROR" && lvl != "WARNING" {
+				continue
+			}
+			sev := "warning"
+			if lvl == "ERROR" {
+				sev = "error"
+			}
+			findings = append(findings, map[string]any{
+				"severity": sev, "category": "HA/zigpy log",
+				"message": fmt.Sprintf("%v (logged %vx by %v) — Home Assistant/zigpy reported this about the device directly; the sniffer's RF view alone wouldn't show it",
+					l["message"], l["count"], l["logger"]),
+			})
+		}
+		analysis["findings"] = findings
+		writeJSON(w, analysis)
+	})
 	mux.HandleFunc("/api/diagnostics", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, nz(s.DB.Diagnostics(panOf(s.RT))))
 	})
@@ -869,6 +1028,29 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		writeJSON(w, map[string]any{})
+	})
+	// Demo mode: the dashboard polls this to decide whether to show the
+	// "no hardware found" banner (Retry / Enter Demo Mode) or the persistent
+	// "demo mode active" banner — never switches automatically either way.
+	mux.HandleFunc("/api/demo/status", func(w http.ResponseWriter, r *http.Request) {
+		demoActive := s.DemoActive != nil && s.DemoActive.Load()
+		noHW := s.NoHardwareDetected != nil && s.NoHardwareDetected.Load()
+		writeJSON(w, map[string]any{"demo": demoActive, "no_hardware_detected": noHW && !demoActive})
+	})
+	mux.HandleFunc("/api/demo/enable", func(w http.ResponseWriter, r *http.Request) {
+		if s.EnterDemo != nil {
+			s.EnterDemo()
+		}
+		writeJSON(w, map[string]any{"ok": true})
+	})
+	// "Retry" doesn't need to do anything to the (already-continuous) hardware
+	// search — it just clears the banner's flag so the UI stops offering demo
+	// mode until the search has gone quiet for a while again.
+	mux.HandleFunc("/api/demo/retry", func(w http.ResponseWriter, r *http.Request) {
+		if s.NoHardwareDetected != nil {
+			s.NoHardwareDetected.Store(false)
+		}
+		writeJSON(w, map[string]any{"ok": true})
 	})
 	// Recent captured frames (seeds the live-frames table on page load, since the
 	// WebSocket only streams frames that arrive after the page connects).
@@ -926,6 +1108,17 @@ func (s *Server) Handler() http.Handler {
 			writeJSON(w, map[string]any{"ok": false, "reason": "empty or too-small firmware upload"})
 			return
 		}
+		// Refuse a second transfer while one's already in flight: every POST
+		// here spawns an independent goroutine that runs to completion
+		// regardless of later requests, so without this guard, overlapping
+		// attempts would interleave OTA_BEGIN/DATA/END against the same
+		// target — each fresh OTA_BEGIN restarts the device's own OTA state
+		// machine, so the earlier attempt never has a chance to finish and
+		// neither does the new one; it looks like a hung transfer forever.
+		if s.OtaActive != nil && !s.OtaActive.CompareAndSwap(false, true) {
+			writeJSON(w, map[string]any{"ok": false, "reason": "an OTA transfer is already in progress — wait for it to finish"})
+			return
+		}
 		crc := crc32.ChecksumIEEE(data)
 		send := func(b []byte) {
 			if port != "" {
@@ -934,24 +1127,201 @@ func (s *Server) Handler() http.Handler {
 				s.cmd(b)
 			}
 		}
+		log.Printf("OTA: starting transfer to target %d (%d bytes, crc %08x) — pausing all radios for the duration", target, len(data), crc)
 		go func() {
+			if s.OtaActive != nil {
+				defer time.AfterFunc(5*time.Second, func() { s.OtaActive.Store(false) })
+				// The 5s grace period after OTA_END covers the device processing
+				// the end-of-image check and rebooting — also a legitimate silence
+				// the watchdog shouldn't react to.
+			}
+			// Every radio's capture/spectrum/etc competes with the OTA relay for
+			// the same USB/SPI links (this is exactly what was silently corrupting
+			// satellite OTA replies before the SPI relay fix) — pause all of them
+			// for the transfer, and resume whatever each was doing afterward.
+			var savedRoles map[int]string
+			if s.Roles != nil {
+				savedRoles = s.Roles()
+			}
+			if s.Radios != nil {
+				for _, rd := range s.Radios.List() {
+					s.stopOn(rd.Port, rd.RadioID)
+				}
+			}
+			resume := func() {
+				if s.SetRole == nil {
+					return
+				}
+				for radioID, role := range savedRoles {
+					if role != "" {
+						s.SetRole(radioID, role)
+					}
+				}
+			}
+			if s.OtaProg != nil {
+				s.OtaProg.Reset(target) // a stale count from an earlier attempt would let the gate below race ahead
+			}
+			beginOK := true
 			send(proto.CmdOtaBeginMsg(byte(target), uint32(len(data)), crc))
-			time.Sleep(400 * time.Millisecond) // let esp_ota_begin() erase/prepare
+			if target != 0 && s.OtaProg != nil {
+				// CMD_OTA_BEGIN is just as much a single, un-redundant message
+				// as END — if it's lost, the satellite silently stays in
+				// OTA_IDLE and every subsequent chunk fails its state check
+				// forever (observed: the whole transfer stalls at offset 0),
+				// with no error anywhere since ota_write()'s failure is
+				// swallowed and status still reports normally otherwise.
+				beginOK = false
+				for attempt := 0; attempt < 4 && !beginOK; attempt++ {
+					if attempt > 0 {
+						send(proto.CmdOtaBeginMsg(byte(target), uint32(len(data)), crc))
+					}
+					deadline := time.Now().Add(2 * time.Second)
+					for time.Now().Before(deadline) {
+						if s.OtaProg.State(target) == proto.OtaReceiving {
+							beginOK = true
+							break
+						}
+						time.Sleep(20 * time.Millisecond)
+					}
+				}
+				if !beginOK {
+					log.Printf("OTA: target %d never confirmed OTA_BEGIN — aborting before sending any data", target)
+				}
+			} else {
+				time.Sleep(400 * time.Millisecond) // let esp_ota_begin() erase/prepare (target 0: no confirmation channel, keep the old fixed wait)
+			}
 			// Satellite chunks are relayed over SPI (256-byte transactions), so
 			// keep them small enough to fit one transaction incl. framing.
 			chunk := 512
 			if target != 0 {
 				chunk = 200
 			}
-			for off := 0; off < len(data); off += chunk {
+			aborted := !beginOK
+			for off := 0; off < len(data) && !aborted; off += chunk {
 				end := off + chunk
 				if end > len(data) {
 					end = len(data)
 				}
+				// esp_ota_write() has no offset parameter — it just appends
+				// sequentially wherever its internal write pointer is. So a
+				// single silently-dropped chunk (the satellite's OTA queue is
+				// small and a synchronous flash write can't always keep up
+				// with a fixed send pace) doesn't just leave a gap: every
+				// later chunk lands one position early forever after,
+				// corrupting the rest of the image with zero visible error
+				// until the final esp_ota_end() validation fails. So don't
+				// just cap how far ahead we can get — actually confirm the
+				// satellite's own acknowledged byte count reaches THIS
+				// chunk's end before advancing, resending it if not.
+				if target != 0 && s.OtaProg != nil {
+					want := uint32(end)
+					confirmed := false
+					for attempt := 0; attempt < 8 && !confirmed; attempt++ {
+						if attempt > 0 {
+							// Visibility only: on the satellite's currently-running
+							// (pre-dedup) firmware, this resend is exactly what
+							// double-writes and corrupts the image — logging it
+							// lets a failure be correlated with "a retry happened
+							// here" instead of looking like unexplained corruption.
+							log.Printf("OTA: target %d chunk at offset %d not yet confirmed — resending (attempt %d/8)", target, off, attempt+1)
+						}
+						send(proto.CmdOtaDataMsg(byte(target), uint32(off), data[off:end]))
+						// Tried extending this to 22s on the theory that retries
+						// were firing on a periodic near-miss (replies genuinely
+						// in flight, just past a too-tight deadline) — but retries
+						// kept recurring at roughly THAT new deadline too, meaning
+						// most of these are replies that never arrive at all, not
+						// slow ones. Waiting longer per attempt just wastes time
+						// on a genuinely lost reply; a shorter deadline with many
+						// more attempts detects the loss and gets a fresh
+						// transmission (and thus a fresh chance to be received
+						// cleanly) faster.
+						deadline := time.Now().Add(5 * time.Second)
+						for time.Now().Before(deadline) {
+							if s.OtaProg.Get(target) >= want {
+								confirmed = true
+								break
+							}
+							time.Sleep(10 * time.Millisecond)
+						}
+					}
+					if !confirmed {
+						log.Printf("OTA: target %d never acknowledged the chunk at offset %d after retries — aborting rather than send a corrupt image", target, off)
+						send(proto.CmdOtaAbortMsg(byte(target)))
+						aborted = true
+					}
+					continue // chunk (re)sent above, along with its confirmation wait
+				}
 				send(proto.CmdOtaDataMsg(byte(target), uint32(off), data[off:end]))
 				time.Sleep(8 * time.Millisecond) // pace flash writes
 			}
+			if aborted {
+				if s.OtaActive != nil {
+					s.OtaActive.Store(false)
+				}
+				resume()
+				return
+			}
 			send(proto.CmdOtaEndMsg(byte(target)))
+			// Unlike DATA (1000+ chunks, so losing one occasionally doesn't
+			// matter), OTA_END is a single one-shot message — if it's lost in
+			// transit (a real, observed SPI hiccup, not just a software race),
+			// the device silently never reboots despite every byte of the
+			// image having arrived intact, with nothing to show for it. Confirm
+			// via a state transition and resend if it doesn't land.
+			if target != 0 && s.OtaProg != nil {
+				var baselineUptime int
+				var haveBaseline bool
+				if s.Radios != nil {
+					baselineUptime, haveBaseline = s.Radios.UptimeOf(target)
+				}
+				confirmed := false
+				for attempt := 0; attempt < 5 && !confirmed; attempt++ {
+					deadline := time.Now().Add(2 * time.Second)
+					for time.Now().Before(deadline) {
+						if st := s.OtaProg.State(target); st == proto.OtaOK || st == proto.OtaError {
+							confirmed = true
+							break
+						}
+						time.Sleep(50 * time.Millisecond)
+					}
+					if !confirmed {
+						log.Printf("OTA: no confirmation of OTA_END for target %d yet — resending (attempt %d/5)", target, attempt+2)
+						send(proto.CmdOtaEndMsg(byte(target)))
+					}
+				}
+				if !confirmed {
+					// The OTA_END reply itself can be lost even when the update
+					// actually succeeded and the device rebooted — that's exactly
+					// what happened in testing (every byte confirmed, image
+					// verified, reboot happened, but this one final ack didn't
+					// make it back). Rather than report a false failure, fall
+					// back to an independent signal: a reboot resets the
+					// device's own uptime counter, which its regular status
+					// heartbeat reports whether or not OTA_END's reply landed.
+					rebooted := false
+					if haveBaseline && s.Radios != nil {
+						deadline := time.Now().Add(6 * time.Second)
+						for time.Now().Before(deadline) {
+							if u, ok := s.Radios.UptimeOf(target); ok && u < baselineUptime {
+								rebooted = true
+								break
+							}
+							time.Sleep(200 * time.Millisecond)
+						}
+					}
+					if rebooted {
+						log.Printf("OTA: target %d rebooted (uptime reset) — completion confirmed despite a lost OTA_END reply", target)
+					} else {
+						log.Printf("OTA: target %d never confirmed completion after retries — it may not have rebooted", target)
+					}
+				}
+			}
+			// Give the target a moment to validate/reboot before resuming traffic
+			// on the rest of the link — mirrors the watchdog's own grace window.
+			time.Sleep(2 * time.Second)
+			log.Printf("OTA: transfer to target %d complete — resuming paused radios", target)
+			resume()
 		}()
 		writeJSON(w, map[string]any{"ok": true, "size": len(data), "crc": fmt.Sprintf("%08x", crc)})
 	})
@@ -1027,6 +1397,70 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, map[string]any{"radios": list, "pan": panHex(s.RT),
 			"roles": []string{"any", "sniffer", "spectrum", "tester", "hopper", "idle"}})
 	})
+	// Zero every radio's frame/probe counters for a fresh count — doesn't
+	// touch identity, role, channel, or captured history in the DB.
+	mux.HandleFunc("/api/reset_stats", func(w http.ResponseWriter, r *http.Request) {
+		if s.Radios != nil {
+			s.Radios.Reset()
+		}
+		writeJSON(w, map[string]any{"ok": true})
+	})
+	// Purge all captured data (frames, devices, routing, incidents, spectrum,
+	// probe history, schedules) and learned identity data (names/areas/roles
+	// cache) — a clean slate for topology/device data, keeping settings
+	// (HA/Hue credentials, network key, saved ports) untouched. Takes effect
+	// immediately, no restart needed.
+	mux.HandleFunc("/api/purge_data", func(w http.ResponseWriter, r *http.Request) {
+		if s.DB != nil {
+			if err := s.DB.Reset(); err != nil {
+				writeJSON(w, map[string]any{"ok": false, "reason": err.Error()})
+				return
+			}
+		}
+		if s.Reg != nil {
+			s.Reg.Reset()
+		}
+		if s.Radios != nil {
+			s.Radios.Reset()
+		}
+		writeJSON(w, map[string]any{"ok": true})
+	})
+	// Full factory reset: everything /api/purge_data does, PLUS resets
+	// zbsniff.yaml (HA/Hue credentials, network key, saved ports/channel,
+	// radio roles, UI prefs) to defaults. The config-file part only takes
+	// effect on the NEXT process restart — this handler can't safely tear
+	// down and rebuild the live HA/Hue/serial connections in place, so the
+	// current session keeps running on the old settings until restarted.
+	mux.HandleFunc("/api/factory_reset", func(w http.ResponseWriter, r *http.Request) {
+		if s.DB != nil {
+			if err := s.DB.Reset(); err != nil {
+				writeJSON(w, map[string]any{"ok": false, "reason": err.Error()})
+				return
+			}
+		}
+		if s.Reg != nil {
+			s.Reg.Reset()
+		}
+		if s.Radios != nil {
+			s.Radios.Reset()
+		}
+		if s.SaveConfig != nil {
+			s.SaveConfig(func(c *config.Config) {
+				c.HAHost, c.HAToken = "", ""
+				c.HueHost, c.HueKey = "", ""
+				c.Key = ""
+				c.ZHABackup = ""
+				c.RadioRoles = ""
+				c.HopDwellMs = 0
+				c.Mode = 0
+				c.Channel = 0
+				c.IncidentSilenceS = 0
+				c.Ports = nil
+				c.UIPrefs = map[string]string{}
+			})
+		}
+		writeJSON(w, map[string]any{"ok": true, "restart_required": true})
+	})
 	// Assign a radio (by radio-id) to a function; the host applies + persists it.
 	mux.HandleFunc("/api/radio_role", func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.Atoi(r.URL.Query().Get("radio"))
@@ -1039,18 +1473,38 @@ func (s *Server) Handler() http.Handler {
 		}
 		writeJSON(w, map[string]any{"ok": true})
 	})
-	// Provision a dongle's radio-id (persisted to its NVS) so roles can target it.
-	mux.HandleFunc("/api/set_radio_id", func(w http.ResponseWriter, r *http.Request) {
-		id, err := strconv.Atoi(r.URL.Query().Get("id"))
-		port := r.URL.Query().Get("port")
-		if err != nil || port == "" {
-			http.Error(w, "need port and id", 400)
+	// Manually pin one radio to a channel, independent of the others — e.g. run
+	// a satellite on a different channel than the primary for multi-channel
+	// capture. Relayed (SPI satellite) radios get the CMD_SAT_* wire commands;
+	// the primary's own local radio uses the plain global one.
+	mux.HandleFunc("/api/radio_channel", func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.Atoi(r.URL.Query().Get("radio"))
+		ch, chErr := strconv.Atoi(r.URL.Query().Get("ch"))
+		if err != nil || chErr != nil || ch < int(proto.ChannelMin) || ch > int(proto.ChannelMax) {
+			http.Error(w, "need a valid radio id and channel (11-26)", 400)
 			return
 		}
-		if s.SendTo != nil {
-			s.SendTo(port, proto.CmdSetRadioIDMsg(byte(id)))
+		if s.SendTo == nil || s.Radios == nil {
+			writeJSON(w, map[string]any{"ok": false, "reason": "no radios tracked yet"})
+			return
 		}
-		writeJSON(w, map[string]any{"ok": true})
+		ports := s.Radios.PortsFor(id)
+		if len(ports) == 0 {
+			writeJSON(w, map[string]any{"ok": false, "reason": "unknown radio id"})
+			return
+		}
+		s.setChannelOn(ports[0], id, byte(ch))
+		// Radio 0 (the primary's own local radio, see radios.resolve) is the one
+		// case where persistence isn't handled on-device alone from the host's
+		// point of view: a satellite remembers its own channel in its own NVS
+		// regardless of what the host does, but radio 0's restore-on-startup
+		// (see the legacy resend sequence in main.go) reads this saved config,
+		// so it needs to be kept in sync here too — otherwise a per-radio change
+		// to radio 0 would silently revert on the next zbsniff restart.
+		if id == 0 && s.SaveConfig != nil {
+			s.SaveConfig(func(c *config.Config) { c.Channel = ch })
+		}
+		writeJSON(w, map[string]any{"ok": true, "radio": id, "channel": ch})
 	})
 	mux.HandleFunc("/api/probe", func(w http.ResponseWriter, r *http.Request) {
 		addr, ok := parseAddr(r.URL.Query().Get("addr"))
@@ -1062,6 +1516,35 @@ func (s *Server) Handler() http.Handler {
 		port := r.URL.Query().Get("port")
 		sent := s.probe(addr, pan, port)
 		writeJSON(w, map[string]any{"sent": sent})
+	})
+	// Watch: flag an address in the device drawer so ingest() pushes a "watch"
+	// WS event (with a join_related flag) the moment it transmits again —
+	// meant for a "ghost" device that's gone quiet, without babysitting the
+	// Live Frames table for it.
+	mux.HandleFunc("/api/watch_add", func(w http.ResponseWriter, r *http.Request) {
+		addr, ok := parseAddr(r.URL.Query().Get("addr"))
+		if !ok || s.Watch == nil {
+			http.Error(w, "bad addr", 400)
+			return
+		}
+		s.Watch.Add(fmt.Sprintf("0x%04x", uint16(addr)))
+		writeJSON(w, map[string]any{"ok": true})
+	})
+	mux.HandleFunc("/api/watch_remove", func(w http.ResponseWriter, r *http.Request) {
+		addr, ok := parseAddr(r.URL.Query().Get("addr"))
+		if !ok || s.Watch == nil {
+			http.Error(w, "bad addr", 400)
+			return
+		}
+		s.Watch.Remove(fmt.Sprintf("0x%04x", uint16(addr)))
+		writeJSON(w, map[string]any{"ok": true})
+	})
+	mux.HandleFunc("/api/watch_list", func(w http.ResponseWriter, r *http.Request) {
+		if s.Watch == nil {
+			writeJSON(w, map[string]any{"addrs": []string{}})
+			return
+		}
+		writeJSON(w, map[string]any{"addrs": s.Watch.List()})
 	})
 	mux.HandleFunc("/api/probe_history", func(w http.ResponseWriter, r *http.Request) {
 		target := -1
@@ -1109,6 +1592,32 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/spectrum", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, nz(s.DB.Spectrum()))
 	})
+	// Per-channel airtime: frames/min by PAN plus per-PAN RSSI histograms. A
+	// loud neighbouring network shows up here as its frame rate and RSSI
+	// distribution instead of needing "unplug things until it works".
+	mux.HandleFunc("/api/airtime", func(w http.ResponseWriter, r *http.Request) {
+		win := 3600
+		if v, err := strconv.Atoi(r.URL.Query().Get("window")); err == nil && v >= 900 && v <= 172800 {
+			win = v
+		}
+		out := s.DB.Airtime(win)
+		ours := panHex(s.RT)
+		hueCh := s.hueChannel()
+		if pans, ok := out["pans"].([]map[string]any); ok {
+			for _, p := range pans {
+				pan, _ := p["pan"].(string)
+				p["ours"] = pan == ours
+				// Same bridge-fact labeling as /api/networks: a paired Hue
+				// bridge's channel identifies a foreign PAN there as Hue.
+				if pan != ours && hueCh > 0 && p["label"] == "" {
+					if chs, ok := p["channels"].([]int); ok && len(chs) > 0 && chs[0] == hueCh {
+						p["label"] = "Philips Hue"
+					}
+				}
+			}
+		}
+		writeJSON(w, out)
+	})
 	// Zigbee networks (PAN ids) seen on-air, and which one is ours.
 	mux.HandleFunc("/api/networks", func(w http.ResponseWriter, r *http.Request) {
 		nets := nz(s.DB.Networks())
@@ -1125,6 +1634,26 @@ func (s *Server) Handler() http.Handler {
 			}
 		}
 		writeJSON(w, map[string]any{"networks": nets, "ours": ours})
+	})
+	// Explicitly (re)designate which PAN is "home". Needed because the only
+	// automatic source (a ZHA backup file) is a point-in-time snapshot — if
+	// the network's real PAN ever changes (e.g. Zigbee's own PAN-conflict
+	// resolution), every real device silently starts reading as "foreign"
+	// with nothing louder than a broken routing tree to notice by. No on-air
+	// transmitting — this only changes which PAN this host treats as home.
+	mux.HandleFunc("/api/set_home_network", func(w http.ResponseWriter, r *http.Request) {
+		pan, ok := parseShortAddr(r.URL.Query().Get("pan"))
+		if !ok || pan == 0 {
+			writeJSON(w, map[string]any{"ok": false, "reason": "bad pan"})
+			return
+		}
+		if s.RT != nil {
+			s.RT.SetPan(pan)
+		}
+		if s.SaveConfig != nil {
+			s.SaveConfig(func(c *config.Config) { c.PanID = pan })
+		}
+		writeJSON(w, map[string]any{"ok": true, "pan": fmt.Sprintf("0x%04x", pan)})
 	})
 	// Full-band survey: hop every channel briefly to discover networks on all of
 	// them (single radio → pauses capture). Progress goes out on the WebSocket.
@@ -1193,6 +1722,16 @@ func (s *Server) Handler() http.Handler {
 			s.Send(proto.CmdSetChannelMsg(byte(ch)))
 			s.Send(proto.CmdSetModeMsg(proto.ModeCapture))
 			s.Send(proto.CmdStartMsg())
+			// This is the GLOBAL "everyone" channel control, unlike /api/radio_channel
+			// (one radio) — explicitly push it to every relayed satellite too, since
+			// CMD_SET_CHANNEL alone only ever reaches a port's own local radio.
+			if s.Radios != nil && s.SendTo != nil {
+				for _, rd := range s.Radios.List() {
+					if rd.Relayed {
+						s.SendTo(rd.Port, proto.CmdSatSetChannelMsg(byte(rd.RadioID), byte(ch)))
+					}
+				}
+			}
 			if s.SaveConfig != nil {
 				s.SaveConfig(func(c *config.Config) { c.Channel = ch })
 			}
@@ -1211,30 +1750,43 @@ func (s *Server) Handler() http.Handler {
 		if dwell <= 0 {
 			dwell = 5
 		}
-		port, _, ok, _, reason := s.allocate("spectrum")
+		port, radioID, ok, _, reason := s.allocate("spectrum")
 		if !ok {
 			writeJSON(w, map[string]any{"ok": false, "reason": reason})
 			return
 		}
-		s.sendFnTo(port, proto.CmdEdScanMsg(proto.AllChannelsMask(), uint16(dwell)))
+		if s.DemoActive != nil && s.DemoActive.Load() {
+			// Same allocation as real hardware: whichever radio is chosen
+			// briefly stops sniffing for the sweep's duration (a single
+			// radio can't do both at once), not just paint fake ED data on
+			// top of traffic that's still "running."
+			demo.TriggerScan(radioID, dwell)
+		} else {
+			s.sendFnTo(port, proto.CmdEdScanMsg(proto.AllChannelsMask(), uint16(dwell)))
+		}
 		writeJSON(w, map[string]any{"ok": true, "scanning": true, "dwell": dwell})
 	})
 	mux.HandleFunc("/api/start", func(w http.ResponseWriter, r *http.Request) {
-		port, _, ok, _, reason := s.allocate("capture")
+		port, radioID, ok, _, reason := s.allocate("capture")
 		if !ok {
 			writeJSON(w, map[string]any{"ok": false, "reason": reason})
 			return
 		}
-		s.sendFnTo(port, proto.CmdSetModeMsg(proto.ModeCapture), proto.CmdStartMsg())
+		s.startOn(port, radioID)
 		if s.Radios != nil {
-			s.Radios.SetStopped(port, false)
+			s.Radios.SetStopped(port, radioID, false)
 		}
 		writeJSON(w, map[string]any{"ok": true, "capturing": true})
 	})
 	mux.HandleFunc("/api/stop", func(w http.ResponseWriter, r *http.Request) {
-		s.cmd(proto.CmdStopMsg())
+		s.cmd(proto.CmdStopMsg()) // every port's own local radio
 		if s.Radios != nil {
-			s.Radios.SetStopped("", true) // all radios
+			for _, rd := range s.Radios.List() { // + every relayed satellite
+				if rd.Relayed && s.SendTo != nil {
+					s.SendTo(rd.Port, proto.CmdSatStopMsg(byte(rd.RadioID)))
+				}
+			}
+			s.Radios.SetStopped("", -1, true) // all radios
 		}
 		writeJSON(w, map[string]any{"stopped": true})
 	})
@@ -1247,14 +1799,27 @@ func (s *Server) Handler() http.Handler {
 		case proto.ModeCapture, proto.ModeCapturePlusEd:
 			fn = "capture"
 		}
-		port := ""
+		port, radioID := "", -1
 		if fn != "" {
-			p, _, ok, _, reason := s.allocate(fn)
+			p, rid, ok, _, reason := s.allocate(fn)
 			if !ok {
 				writeJSON(w, map[string]any{"ok": false, "reason": reason})
 				return
 			}
-			port = p
+			port, radioID = p, rid
+		}
+		if s.DemoActive != nil && s.DemoActive.Load() {
+			// Same allocation as real hardware — whichever radio is chosen
+			// for "spectrum" actually stops sniffing while the sweep runs
+			// (see demo.StartContinuousScan), instead of running both at once.
+			switch m {
+			case proto.ModeEdSweep:
+				demo.StartContinuousScan(radioID, 20)
+			case proto.ModeCapture, proto.ModeCapturePlusEd:
+				demo.StopContinuousScan()
+			}
+			writeJSON(w, map[string]any{"ok": true, "mode": m})
+			return
 		}
 		frames := [][]byte{proto.CmdSetModeMsg(byte(m))}
 		if m == proto.ModeCapture {
@@ -1348,6 +1913,10 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, map[string]any{"ok": true, "url": names.WSURLFromHost(host)})
 	})
 	mux.HandleFunc("/api/ha_status", func(w http.ResponseWriter, r *http.Request) {
+		if s.DemoActive != nil && s.DemoActive.Load() {
+			writeJSON(w, map[string]any{"connected": true, "devices": len(demo.HomeDevices) + 1})
+			return
+		}
 		if s.HA != nil {
 			writeJSON(w, s.HA.Status())
 			return
@@ -1374,6 +1943,10 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, map[string]any{"ok": true, "paired": true})
 	})
 	mux.HandleFunc("/api/hue_status", func(w http.ResponseWriter, r *http.Request) {
+		if s.DemoActive != nil && s.DemoActive.Load() {
+			writeJSON(w, map[string]any{"connected": true, "devices": len(demo.HueDevices) - 1, "channel": demo.HueChan, "host": "demo-bridge"})
+			return
+		}
 		if s.Hue != nil {
 			writeJSON(w, s.Hue.Status())
 			return

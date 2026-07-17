@@ -45,6 +45,12 @@ const (
 	CmdOtaAbort   = 0x8E
 	CmdBeaconReq  = 0x8F
 	CmdTxRaw      = 0x90
+
+	// Relayed satellite control (target(1) + inner args, stripped and forwarded
+	// over SPI by the primary) — see docs on CMD_SET_CHANNEL/CMD_START/CMD_STOP.
+	CmdSatSetChannel = 0x91
+	CmdSatStart      = 0x92
+	CmdSatStop       = 0x93
 )
 
 // OTA states (MsgOtaStatus.State).
@@ -148,6 +154,17 @@ func CmdOtaBeginMsg(target byte, total, crc32 uint32) []byte {
 	binary.LittleEndian.PutUint32(p[5:], crc32)
 	return Encode(CmdOtaBegin, p)
 }
+// CmdOtaDataMsg's wire format is deliberately NOT versioned/extended lightly:
+// this message is parsed by whatever firmware is CURRENTLY RUNNING on the
+// target, which is exactly the firmware an OTA update is trying to replace.
+// A field added here only helps once new firmware understanding it is
+// already installed — but the only way to install it is a transfer using
+// THIS message, parsed by the OLD firmware. Changing the format silently
+// breaks that transfer for every device still running anything older,
+// with no way to recover except a physical reflash. (Learned the hard way:
+// an added content-checksum field shifted every chunk's data by 4 bytes as
+// seen by old firmware, corrupting the image from byte zero — every
+// subsequent failure looked like a deeper bug until this was traced back.)
 func CmdOtaDataMsg(target byte, offset uint32, chunk []byte) []byte {
 	p := make([]byte, 5+len(chunk))
 	p[0] = target
@@ -157,6 +174,11 @@ func CmdOtaDataMsg(target byte, offset uint32, chunk []byte) []byte {
 }
 func CmdOtaEndMsg(target byte) []byte   { return Encode(CmdOtaEnd, []byte{target}) }
 func CmdOtaAbortMsg(target byte) []byte { return Encode(CmdOtaAbort, []byte{target}) }
+
+// Relayed satellite control builders. target is the satellite's radio-id (1..3).
+func CmdSatSetChannelMsg(target, ch byte) []byte { return Encode(CmdSatSetChannel, []byte{target, ch}) }
+func CmdSatStartMsg(target byte) []byte          { return Encode(CmdSatStart, []byte{target}) }
+func CmdSatStopMsg(target byte) []byte           { return Encode(CmdSatStop, []byte{target}) }
 
 // CmdBeaconReqMsg asks the radio to transmit an 802.15.4 beacon request on the
 // current channel; coordinators/routers reply with a beacon revealing their PAN.

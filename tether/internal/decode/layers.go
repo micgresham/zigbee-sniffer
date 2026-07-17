@@ -43,10 +43,35 @@ func fmtAddr(addr int64, mode byte) string {
 // Summary is a one-line description of the MAC frame.
 func (m *MacFrame) Summary() string {
 	s := fmt.Sprintf("%s seq=%d", m.TypeName, m.Seq)
+	if cn := m.CmdName(); cn != "" {
+		s += ": " + cn
+	}
 	if m.SrcAddr >= 0 || m.DstAddr >= 0 {
 		s += " " + fmtAddr(m.SrcAddr, m.SrcMode) + "→" + fmtAddr(m.DstAddr, m.DstMode)
 	}
 	return s
+}
+
+// CmdID returns the MAC command frame identifier (first payload byte) when
+// this is a MAC Command frame (FrameType 3), else -1. See macCmdNames.
+func (m *MacFrame) CmdID() int {
+	if m.FrameType != 3 || len(m.Payload) == 0 {
+		return -1
+	}
+	return int(m.Payload[0])
+}
+
+// CmdName returns the human name for CmdID(), or "" if this isn't a MAC
+// Command frame.
+func (m *MacFrame) CmdName() string {
+	id := m.CmdID()
+	if id < 0 {
+		return ""
+	}
+	if n, ok := macCmdNames[byte(id)]; ok {
+		return n
+	}
+	return fmt.Sprintf("cmd 0x%02x", id)
 }
 
 // DecodeMAC decodes a raw MPDU. Tolerant of truncation.
@@ -359,6 +384,13 @@ type Decoded struct {
 	NWK *NwkFrame
 	APS *ApsFrame
 	ZCL *ZclFrame
+	// SixLowPAN is true when the MAC payload looks like 6LoWPAN (RFC
+	// 4944/6282) rather than a Zigbee NWK frame — i.e. this is a Thread
+	// network (and so, very likely, carrying Matter, since nearly all Matter
+	// devices run over Thread) sharing the same 802.15.4 band, not another
+	// Zigbee network. We can't verify Matter specifically without that
+	// network's key — same limitation as any other foreign/encrypted network.
+	SixLowPAN bool
 }
 
 // Summary is a one-line cross-layer description.
@@ -396,6 +428,26 @@ func (d *Decoded) zclSummary() string {
 	return fmt.Sprintf("cmd 0x%02x", z.CommandID)
 }
 
+// isSixLowPANDispatch reports whether b is a 6LoWPAN dispatch byte (RFC
+// 4944/6282) — the cheapest signal that a MAC payload which failed the
+// Zigbee NWK version check is actually Thread, not just an unrecognized or
+// malformed Zigbee frame. Covers the patterns that matter in practice:
+// LOWPAN_IPHC (nearly all real Thread traffic), uncompressed IPv6, mesh
+// addressing, and 6LoWPAN fragmentation.
+func isSixLowPANDispatch(b byte) bool {
+	switch {
+	case b == 0x41: // uncompressed IPv6 (RFC 4944 §5.1)
+		return true
+	case b&0xE0 == 0x60: // LOWPAN_IPHC (RFC 6282)
+		return true
+	case b&0xC0 == 0x80: // mesh addressing header
+		return true
+	case b&0xF8 == 0xC0, b&0xF8 == 0xE0: // fragmentation: first / subsequent
+		return true
+	}
+	return false
+}
+
 // DecodeFrame walks MAC → NWK → APS → ZCL, decrypting if a key is supplied.
 func DecodeFrame(mpdu []byte, networkKey []byte) *Decoded {
 	mac := DecodeMAC(mpdu)
@@ -404,7 +456,11 @@ func DecodeFrame(mpdu []byte, networkKey []byte) *Decoded {
 		return d
 	}
 	d.NWK = DecodeNWK(mac.Payload, networkKey)
-	if d.NWK == nil || (d.NWK.Secure && !d.NWK.Decrypted) {
+	if d.NWK == nil {
+		d.SixLowPAN = isSixLowPANDispatch(mac.Payload[0])
+		return d
+	}
+	if d.NWK.Secure && !d.NWK.Decrypted {
 		return d
 	}
 	d.APS = DecodeAPS(d.NWK.Payload)

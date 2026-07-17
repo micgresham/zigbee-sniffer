@@ -24,13 +24,14 @@ type NetSig struct {
 // Registry maps 16-bit short addresses to a display name (IEEE or friendly name)
 // and the network-reported link quality (distinct from the sniffer's own view).
 type Registry struct {
-	mu    sync.RWMutex
-	m     map[uint16]string
-	net   map[uint16]NetSig
-	byExt map[uint64]string // extended (IEEE) address -> name (e.g. from a Hue bridge)
-	extOf map[uint16]uint64 // short address -> its extended (IEEE) address (learned on-air)
-	info  map[uint16]DeviceInfo
-	nbr   map[uint16][]Neighbor // per-device neighbour table (from ZHA), for traceroute
+	mu     sync.RWMutex
+	m      map[uint16]string
+	net    map[uint16]NetSig
+	byExt  map[uint64]string // extended (IEEE) address -> name (e.g. from a Hue bridge)
+	extOf  map[uint16]uint64 // short address -> its extended (IEEE) address (learned on-air)
+	info   map[uint16]DeviceInfo
+	nbr    map[uint16][]Neighbor // per-device neighbour table (from ZHA), for traceroute
+	byArea map[uint64]string     // extended (IEEE) address -> HA area/room name
 }
 
 // Endpoint describes one application endpoint and its clusters.
@@ -48,6 +49,8 @@ type DeviceInfo struct {
 	Model        string     `json:"model"`
 	PowerSource  string     `json:"power_source"`
 	DeviceType   string     `json:"device_type"`
+	Available    bool       `json:"available"`     // HA's live reachability view
+	HasAvailable bool       `json:"has_available"`  // false if HA didn't report this field at all
 	Endpoints    []Endpoint `json:"endpoints"`
 }
 
@@ -91,7 +94,25 @@ func (r *Registry) Neighbors() map[uint16][]Neighbor {
 func New() *Registry {
 	return &Registry{m: map[uint16]string{}, net: map[uint16]NetSig{},
 		byExt: map[uint64]string{}, extOf: map[uint16]uint64{},
-		info: map[uint16]DeviceInfo{}, nbr: map[uint16][]Neighbor{}}
+		info: map[uint16]DeviceInfo{}, nbr: map[uint16][]Neighbor{},
+		byArea: map[uint64]string{}}
+}
+
+// Reset clears all learned/cached identity data (names, areas, capabilities,
+// neighbour tables, network signal, short<->IEEE mappings) — used by the
+// dashboard's "purge data"/"factory reset" controls so a stale mapping (e.g.
+// a device's old short address) doesn't linger. HA/Hue will naturally
+// repopulate live data on their next fetch cycle.
+func (r *Registry) Reset() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.m = map[uint16]string{}
+	r.net = map[uint16]NetSig{}
+	r.byExt = map[uint64]string{}
+	r.extOf = map[uint16]uint64{}
+	r.info = map[uint16]DeviceInfo{}
+	r.nbr = map[uint16][]Neighbor{}
+	r.byArea = map[uint64]string{}
 }
 
 // SetShortExt records a short<->extended address mapping, learned from a frame
@@ -113,6 +134,16 @@ func (r *Registry) SetShortExt(short uint16, ext uint64) bool {
 	return true
 }
 
+// ExtOf returns the learned extended (IEEE) address for a short address, if
+// known — e.g. to match HA/zigpy log lines, which reference devices by IEEE
+// far more often than by their (unstable, rejoin-can-change-it) short address.
+func (r *Registry) ExtOf(short uint16) (uint64, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	ext, ok := r.extOf[short]
+	return ext, ok
+}
+
 // NameFull returns a real device name for a short address: a friendly name if
 // known, else a name for its extended address (e.g. from a Hue bridge), else "".
 func (r *Registry) NameFull(hexAddr string) string {
@@ -131,6 +162,32 @@ func (r *Registry) NameFull(hexAddr string) string {
 	return ""
 }
 
+// DeviceType returns "Coordinator"/"Router"/"EndDevice" as ZHA reported it for
+// this short address, or "" if not (yet) known — e.g. before the first HA
+// fetch, or for a foreign-network device HA has never heard of.
+func (r *Registry) DeviceType(hexAddr string) string {
+	short, ok := parseShort(hexAddr)
+	if !ok {
+		return ""
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.info[short].DeviceType
+}
+
+// Available returns HA's live reachability view for this short address
+// (known=false if HA hasn't reported an "available" field for it at all).
+func (r *Registry) Available(hexAddr string) (available, known bool) {
+	short, ok := parseShort(hexAddr)
+	if !ok {
+		return false, false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	i := r.info[short]
+	return i.Available, i.HasAvailable
+}
+
 // Mfg returns the manufacturer (OUI) label for a short address, via its learned
 // extended address, or "". Used as a fallback when no name is available.
 func (r *Registry) Mfg(hexAddr string) string {
@@ -145,6 +202,31 @@ func (r *Registry) Mfg(hexAddr string) string {
 		return ""
 	}
 	return vendorForExt(ext)
+}
+
+// SetArea records a device's HA area/room name, keyed by its extended (IEEE)
+// address (from HA's device_registry + area_registry, cross-referenced by
+// IEEE — see ha.go). Robust to the device's short address changing later, the
+// same way SetExt/byExt already is.
+func (r *Registry) SetArea(ext uint64, area string) {
+	if area == "" || ext == 0 {
+		return
+	}
+	r.mu.Lock()
+	r.byArea[ext] = area
+	r.mu.Unlock()
+}
+
+// Area returns the HA area/room name for a short address, via its learned
+// extended address, or "" if unknown.
+func (r *Registry) Area(hexAddr string) string {
+	short, ok := parseShort(hexAddr)
+	if !ok {
+		return ""
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.byArea[r.extOf[short]]
 }
 
 func parseShort(hexAddr string) (uint16, bool) {

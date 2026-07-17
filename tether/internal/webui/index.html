@@ -23,14 +23,14 @@ body.light #waterfall,body.light .logs{background:#0b0e13}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
 header{display:flex;align-items:center;gap:12px;padding:11px 18px;background:var(--header);
-border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5;flex-wrap:wrap;row-gap:8px}
 header h1{font-size:16px;margin:0;font-weight:680;letter-spacing:.2px}
 header h1 span{color:var(--accent)}
 #conn{font-size:12px;padding:3px 10px;border-radius:20px;font-weight:600}
 #conn.ok{background:#0f2e1a;color:var(--good);box-shadow:0 0 0 1px #1c4}
 #conn.bad{background:#3a1414;color:var(--weak)}
 #conn.warn{background:#3a2e14;color:var(--fair)}
-.metrics{margin-left:auto;display:flex;gap:18px;color:var(--dim);font-size:12px}
+.metrics{margin-left:auto;display:flex;gap:18px;color:var(--dim);font-size:12px;flex-wrap:wrap;row-gap:6px}
 .metrics b{color:var(--fg);font-variant-numeric:tabular-nums}
 .controls{display:flex;gap:8px;padding:12px 18px;align-items:center;flex-wrap:wrap;background:var(--panel);border-bottom:1px solid var(--line)}
 .controls label{color:var(--dim);font-size:13px}
@@ -55,8 +55,11 @@ tr.click{cursor:pointer}tr.click:hover td{background:var(--rowhover)}
 .tag.coord{background:#10243f;color:var(--accent)}
 .lock{color:var(--accent2)}
 #routing{width:100%;height:340px;display:block}
+#routing-panel:fullscreen{background:var(--panel);padding:14px;box-sizing:border-box;display:flex;flex-direction:column;overflow-y:auto}
+#routing-panel:fullscreen #routing{flex:1 1 auto;min-height:0;height:auto}
+#routing-panel:fullscreen .legend{flex:0 0 auto}
 #routing text{font:10px ui-monospace,monospace}
-#routing circle{cursor:pointer}
+#routing circle,#routing rect{cursor:pointer}
 .spectrum{display:flex;align-items:flex-end;gap:5px;height:160px}
 .bar{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%}
 .bar .fill{width:100%;border-radius:3px 3px 0 0;background:var(--accent);min-height:2px;transition:height .3s}
@@ -97,6 +100,13 @@ tr.click{cursor:pointer}tr.click:hover td{background:var(--rowhover)}
 .cgroup input{background:var(--field);color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:6px;width:64px}
 select{background:var(--field);color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:6px}
 #c-decstat.on{background:#0f2e1a;color:var(--good)}
+#watch-toasts{position:fixed;top:12px;right:12px;z-index:999;display:flex;flex-direction:column;gap:8px;max-width:340px}
+.watch-toast{background:var(--panel);border:1px solid var(--accent);border-radius:8px;padding:10px 30px 10px 12px;
+  font-size:12px;box-shadow:0 4px 14px rgba(0,0,0,.35);position:relative;animation:wt-in .2s ease-out}
+.watch-toast.good{border-color:var(--good)}
+.watch-toast .wt-close{position:absolute;top:4px;right:6px;background:none;border:none;color:var(--dim);
+  cursor:pointer;font-size:14px;padding:2px 6px}
+@keyframes wt-in{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
 .devstatus{margin-top:14px;padding-top:12px;border-top:1px solid var(--line);display:flex;gap:22px;flex-wrap:wrap;font-size:12px;color:var(--dim)}
 .devstatus b{color:var(--fg);font-variant-numeric:tabular-nums}
 #ha-stat.on,#ha-stat.ok,#hue-stat.ok{background:#0f2e1a;color:var(--good)}
@@ -112,6 +122,11 @@ select{background:var(--field);color:var(--fg);border:1px solid var(--line);bord
 .dgfilter label{display:inline-flex;align-items:center;gap:4px;color:var(--dim);cursor:pointer}
 .diag .cat{font-weight:600;width:130px}.diag .msg{color:var(--dim);flex:1}
 .diag .addr{cursor:pointer;color:var(--accent)}
+/* Drawer is 420px wide — the fixed sev/cat columns sized for the full-width
+   diagnostics panel leave almost no room for the message, so stack instead. */
+#dbody .diag{flex-direction:column;align-items:flex-start;gap:2px}
+#dbody .diag .cat{width:auto}
+#dbody .diag .msg{flex:none}
 .connstats{display:flex;gap:20px;flex-wrap:wrap;font-size:12px;color:var(--dim);margin-bottom:10px;align-items:center}
 .connstats b{color:var(--fg);font-variant-numeric:tabular-nums}
 .logs{margin:0;padding:10px;background:#080b0f;border:1px solid var(--line);border-radius:8px;
@@ -129,19 +144,29 @@ border-left:1px solid var(--line);transform:translateX(100%);transition:.2s;z-in
 </style>
 </head>
 <body>
+<div id="watch-toasts"></div>
 <header>
   <h1>Zigbee <span>Sniffer</span> · Tethered</h1>
   <span id="conn" class="bad">host: disconnected</span>
   <span id="cap-ind-hdr" class="capind idle">■ idle</span>
   <span id="hop-warn" style="display:none;background:#7a4a00;color:#ffd591;padding:4px 12px;border-radius:14px;font-size:12px;font-weight:600;cursor:pointer" title="The radio is hopping across channels, so your network is only captured part of the time. Click to pin it.">⚠ channel-hopping</span>
+  <span id="ota-warn" style="display:none;background:#7a1a1a;color:#ffd0d0;padding:4px 12px;border-radius:14px;font-size:12px;font-weight:600" title="An OTA firmware update is in progress. All radios are paused for the duration and will resume automatically when it finishes.">⚠ OTA in progress — all radios paused</span>
+  <span id="demo-badge" style="display:none;background:#3a1a6e;color:#e0d0ff;padding:4px 12px;border-radius:14px;font-size:12px;font-weight:600" title="Every device, name, and frame on this dashboard is simulated — no hardware is connected.">DEMO MODE — simulated data</span>
   <div class="metrics">
     <span>ch <b id="m-ch">—</b></span>
     <span>captured <b id="m-cap">0</b></span>
     <span>dropped <b id="m-drop">0</b></span>
     <span>devices <b id="m-dev">0</b></span>
+    <button id="m-clear-stats" title="zero every radio's frame/probe counters (identity/role/channel untouched)" style="font-size:11px;padding:2px 8px">clear stats</button>
     <span id="m-dec" class="pill" style="display:none">decrypting</span>
   </div>
 </header>
+
+<div id="no-hw-banner" style="display:none;background:#3a2f0a;color:#ffe9a8;padding:10px 16px;align-items:center;gap:14px;font-size:13px;border-bottom:1px solid #5a4a10">
+  <span>⚠ No Zigbee hardware detected — still watching for a device to appear.</span>
+  <button id="no-hw-retry" style="font-size:12px;padding:4px 10px">↻ Retry search</button>
+  <button id="no-hw-demo" style="font-size:12px;padding:4px 10px">🎭 Enter demo mode</button>
+</div>
 
 <div class="tabs">
   <button class="tabbtn on" data-t="overview">Overview</button>
@@ -156,23 +181,17 @@ border-left:1px solid var(--line);transform:translateX(100%);transition:.2s;z-in
 <div class="grid">
   <div class="panel wide cpanel" data-tab="frames">
     <h2>Capture controls <span id="cap-ind" class="capind idle">■ idle</span>
-      <span class="dim" style="font-weight:400;text-transform:none">— start/stop capture &amp; set channel/mode on the connected C6</span></h2>
+      <span class="dim" style="font-weight:400;text-transform:none">— start/stop capture; set each radio's channel/role in Config</span></h2>
     <div class="cgroups">
       <div class="cgroup"><label>Capture</label><div class="row">
         <button id="c-start">▶ Start</button><button id="c-stop">⏹ Stop</button>
         <button id="c-restart">↻ Restart</button><button id="c-reset">⟳ Reset radio</button>
       </div></div>
-      <div class="cgroup"><label title="what this radio does: Capture = passive frame sniffing; ED spectrum sweep = continuous energy scan for the RF spectrum tab (no frame capture); Capture + ED = interleave both (single radio time-slices); Idle = radio parked. With multiple radios, prefer per-radio Roles in Config.">Mode ⓘ</label><div class="row">
-        <select id="c-mode" title="Capture = sniff frames · ED spectrum sweep = feed the RF spectrum tab (stops capture) · Capture + ED = both, time-sliced on one radio · Idle = park the radio">
-        <option value="1">Capture</option><option value="2">ED spectrum sweep</option>
-        <option value="3">Capture + ED</option><option value="0">Idle</option></select>
-      </div></div>
-      <div class="cgroup"><label>Channel</label><div class="row">
-        <input id="c-ch" type="number" min="11" max="26" value="20">
-        <button id="c-setch">Set</button><button id="c-scan">Scan spectrum</button>
-      </div></div>
     </div>
     <div class="devstatus" id="devstatus"><span class="dim">device status: waiting…</span></div>
+    <div class="scroll" style="margin-top:10px"><table><thead><tr>
+      <th>Radio</th><th>Ch</th><th>Mode</th><th>Captured</th><th>Dropped</th><th>Uptime</th></tr></thead>
+      <tbody id="radio-stats"></tbody></table></div>
   </div>
 
   <div class="panel wide cpanel" data-tab="config">
@@ -227,8 +246,8 @@ border-left:1px solid var(--line);transform:translateX(100%);transition:.2s;z-in
     <h2>Radios <span class="dim" style="font-weight:400;text-transform:none;font-size:11px">— assign each C6 a function (up to 4). Roles apply live &amp; are saved.</span></h2>
     <div id="radios-note" class="dim" style="font-size:11px;margin-bottom:6px">…</div>
     <div class="scroll"><table><thead><tr>
-      <th>Port</th><th title="give each dongle a unique id so roles target the right one">Radio ID</th>
-      <th>Role / function</th><th>Ch</th><th>Frames</th><th>Probes</th><th>Seen</th></tr></thead>
+      <th>Port</th><th title="fixed: 0 = this C6's own radio, 1..3 = a satellite's physical SPI slot">Radio ID</th>
+      <th>Role / function</th><th>Ch</th><th title="from this radio's own STATUS heartbeat">FW</th><th>Frames</th><th>Probes</th><th>Seen</th></tr></thead>
       <tbody id="radios-tbl"></tbody></table></div>
     <div class="dim" style="font-size:11px;margin-top:6px">
       <b>sniffer</b> capture (pinned) · <b>spectrum</b> continuous ED sweep (spectrum tab) ·
@@ -269,12 +288,28 @@ border-left:1px solid var(--line);transform:translateX(100%);transition:.2s;z-in
     <div class="dim" style="font-size:11px;margin-top:8px">Upload <span class=mono>firmware/.pio/build/tethered/firmware.bin</span>. USB reflashing stays the fallback and can't brick the device. Satellite OTA (over SPI) is staged — see docs/ota.md.</div>
   </div>
 
-  <div class="panel">
+  <div class="panel wide" data-tab="config" style="border-color:var(--weak)">
+    <h2 style="color:var(--weak)">⚠ Danger zone</h2>
+    <div class="row" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button id="cfg-purge">Purge captured data</button>
+      <span class="dim" style="font-size:11px">clears frames, devices, routing, incidents, spectrum, probe history, schedules, and the learned name/area cache — keeps HA/Hue credentials, network key, saved ports</span>
+    </div>
+    <div class="row" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px">
+      <button id="cfg-factory-reset" style="border-color:var(--weak);color:var(--weak)">⚠ Full factory reset</button>
+      <span class="dim" style="font-size:11px">everything above, PLUS wipes HA/Hue credentials, network key, saved ports/channel, and radio roles back to defaults — requires restarting zbsniff to fully take effect</span>
+    </div>
+    <div id="cfg-danger-out" class="dim" style="font-size:11px;margin-top:8px"></div>
+  </div>
+
+  <div class="panel" id="routing-panel">
     <h2><span>Routing tree → coordinator <span class="cnt" id="r-cnt">0 links</span></span>
       <span style="display:flex;gap:6px">
         <button id="rg-leaves" class="on" style="font-size:11px;padding:2px 8px">End devices</button>
         <button id="rg-foreign" class="on" style="font-size:11px;padding:2px 8px" title="show devices on other networks (e.g. Hue), coloured purple with /FGN:&lt;channel&gt;">Foreign</button>
         <button id="rg-reset" style="font-size:11px;padding:2px 8px">Reset view</button>
+        <button id="rg-fit" style="font-size:11px;padding:2px 8px" title="zoom/pan so every visible node fits on screen">⊡ Zoom extents</button>
+        <button id="rg-fullscreen" style="font-size:11px;padding:2px 8px" title="expand the graph to fill the screen (Esc to exit)">⛶ Fullscreen</button>
+        <button id="rg-png" style="font-size:11px;padding:2px 8px" title="download the current graph view as a PNG image">⬇ Save PNG</button>
       </span></h2>
     <div class="row" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:6px;font-size:12px">
       <label class="dim">isolate <select id="rg-isolate" style="max-width:170px"><option value="">All devices</option></select></label>
@@ -284,7 +319,9 @@ border-left:1px solid var(--line);transform:translateX(100%);transition:.2s;z-in
     </div>
     <svg id="routing" viewBox="0 0 600 340" preserveAspectRatio="xMidYMid meet" style="cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none"></svg>
     <div class="legend">
-      <span><i style="background:var(--accent)"></i>coordinator</span>
+      <span><i style="background:var(--accent);border-radius:3px"></i>coordinator (■ = HA's own shape convention)</span>
+      <span><i style="background:#22b8cf;border-radius:3px"></i>router (■ = routing-capable, per HA)</span>
+      <span><i style="background:#8b97a3;border-radius:50%"></i>end device (● = leaf, per HA)</span>
       <span><i style="background:var(--good)"></i>strong ⌖</span>
       <span><i style="background:var(--fair)"></i>fair ⌖</span>
       <span><i style="background:var(--weak)"></i>weak / isolated</span>
@@ -345,6 +382,23 @@ border-left:1px solid var(--line);transform:translateX(100%);transition:.2s;z-in
     <tbody id="nw-tbl"></tbody></table></div>
   </div>
 
+  <div class="panel wide" data-tab="spectrum">
+    <h2>Channel airtime <span class="cnt" id="air-cnt">0</span>
+      <span class="dim" style="font-weight:400;text-transform:none;font-size:11px">frames/min by network — who is using the air, and how loudly</span>
+      <span class="seg" id="air-win" style="float:right">
+        <button data-w="900">15m</button><button data-w="3600" class="on">1h</button>
+        <button data-w="21600">6h</button><button data-w="86400">24h</button></span></h2>
+    <div class="dim" style="font-size:11px;margin-bottom:8px">
+      A loud neighbouring PAN close to your coordinator can break your network without ever touching your channel.
+      Each bar is a slice of the window, stacked by network; the RSSI histogram per network says how <i>close/loud</i> it is at the sniffer.
+      <b>Heard-at-sniffer caveat ⌖:</b> rates and RSSI reflect this sniffer's location and its captured channel(s) — a hopping or foreign-channel network is only sampled while a radio is listening there.
+    </div>
+    <svg id="air-chart" style="width:100%;height:140px;display:block"></svg>
+    <div id="air-x" class="dim" style="display:flex;justify-content:space-between;font-size:10px;margin:2px 0 10px"></div>
+    <div id="air-chans" style="margin-bottom:10px"></div>
+    <div id="air-legend"></div>
+  </div>
+
   <div class="panel">
     <h2>Incidents <span class="cnt" id="i-cnt">0</span></h2>
     <div class="scroll"><table><thead><tr><th>When</th><th>Device</th><th>Reason</th><th>Ch</th><th>Silent</th></tr></thead>
@@ -391,8 +445,16 @@ border-left:1px solid var(--line);transform:translateX(100%);transition:.2s;z-in
   </div>
 
   <div class="panel wide" data-tab="frames">
-    <h2>Live frames (decoded) <button id="pause2" style="font-size:11px;padding:2px 8px">⏸</button></h2>
-    <div class="scroll" style="max-height:340px"><table><thead><tr><th>Time</th><th>Ch</th><th>RSSI</th><th>LQI</th><th>Type</th><th>Summary</th></tr></thead>
+    <h2>Live frames (decoded) <button id="pause2" style="font-size:11px;padding:2px 8px">⏸</button>
+      <span id="f-cnt" class="dim" style="font-weight:400;text-transform:none;font-size:11px"></span></h2>
+    <div class="row" style="gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:center">
+      <select id="f-radio"><option value="">All radios</option></select>
+      <select id="f-type"><option value="">All types</option><option>Data</option><option>Ack</option>
+        <option>MAC Cmd</option><option>Beacon</option></select>
+      <input id="f-search" type="text" placeholder="search summary / address…" style="min-width:220px">
+      <button id="f-clear" style="font-size:11px;padding:2px 8px">✕ clear filters</button>
+    </div>
+    <div class="scroll" style="max-height:340px"><table><thead><tr><th>Time</th><th>Radio</th><th>Ch</th><th>RSSI</th><th>LQI</th><th>Type</th><th>Summary</th></tr></thead>
     <tbody id="frames"></tbody></table></div>
   </div>
 
@@ -425,7 +487,23 @@ const fmtTime=ts=>{if(!ts)return"";const d=new Date(ts*1000);
   return sameDay?d.toLocaleTimeString([],{hour12:false})
     :d.toLocaleString([],{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false});};
 const ageStr=s=>{const d=(Date.now()/1000)-s;return d<60?Math.floor(d)+"s":d<3600?Math.floor(d/60)+"m":Math.floor(d/3600)+"h";};
-let frames=[],status=null,wsOpen=false,lastData=0,paused=false,devices=[],routing={nodes:[],edges:[]},selected=null;
+let frames=[],status=null,radioStatus={},radiosFramesSum=0,wsOpen=false,lastData=0,paused=false,devices=[],routing={nodes:[],edges:[]},selected=null;
+let watchedAddrs=new Set(),watchLog={};
+function watchLogHtml(addr){const log=watchLog[addr]||[];
+  if(!log.length)return '<div class=dim style="font-size:11px">no activity seen yet while watching</div>';
+  return `<table><thead><tr><th>Time</th><th>Radio</th><th>Type</th><th>Summary</th></tr></thead><tbody>`+
+    log.map(m=>`<tr class="${m.join_related?'good':''}"><td class=dim>${fmtTime(m.ts)}</td><td>R${m.radio??0}</td>`+
+      `<td>${m.join_related?'⭐ ':''}${m.type}</td><td>${annotate(m.summary)}</td></tr>`).join("")+`</tbody></table>`;}
+// A watched address doing anything on-air is easy to miss in the Live Frames
+// table (it scrolls off fast), so pop a banner regardless of which tab is open.
+function watchToast(m){const box=document.createElement("div");
+  box.className="watch-toast"+(m.join_related?" good":"");
+  box.innerHTML=`<b>${m.join_related?"⭐ likely (re)join":"👁 activity"}</b> from <span class=mono>${m.addr}</span>`+
+    `<div style="font-size:11px;margin-top:2px">${m.type} — ${m.summary}</div>`+
+    `<button class="wt-close">×</button>`;
+  box.querySelector(".wt-close").onclick=()=>box.remove();
+  document.getElementById("watch-toasts").appendChild(box);
+  setTimeout(()=>box.remove(),m.join_related?30000:12000);}
 
 function setConn(){const e=document.getElementById("conn");
   if(!wsOpen){e.textContent="host: disconnected";e.className="bad";}
@@ -438,8 +516,12 @@ function ws(){const p=location.protocol==="https:"?"wss:":"ws:";
   s.onclose=()=>{wsOpen=false;setConn();setTimeout(ws,1500);};
   s.onerror=()=>s.close();
   s.onmessage=e=>{const m=JSON.parse(e.data);lastData=Date.now();
-    if(m.kind==="status")status=m;
-    else if(m.kind==="frame"){if(!paused){frames.unshift(m);if(frames.length>200)frames.pop();}}
+    if(m.kind==="status"){const rid=m.radio??0;radioStatus[rid]=m;if(rid===0)status=m;}
+    else if(m.kind==="frame"){if(!paused){frames.unshift(m);if(frames.length>2000)frames.pop();}}
+    else if(m.kind==="watch"){(watchLog[m.addr]=watchLog[m.addr]||[]).unshift(m);
+      if(watchLog[m.addr].length>50)watchLog[m.addr].pop();
+      watchToast(m);
+      if(selected===m.addr){const el=document.getElementById("d-watch-log");if(el)el.innerHTML=watchLogHtml(m.addr);}}
     else if(m.kind==="incident")loadIncidents();
     else if(m.kind==="ota")otaProgress(m);
     else if(m.kind==="survey"){const p=document.getElementById("nw-prog"),k=m.active?"active scan":"survey";
@@ -454,7 +536,13 @@ function otaProgress(m){const box=document.getElementById("ota-prog");if(!box)re
   bar.style.width=pct+"%";
   bar.style.background=m.state===5?"var(--weak)":m.state===4?"var(--good)":"var(--accent)";
   document.getElementById("ota-stat").textContent=
-    `target ${m.target} · ${otaStates[m.state]||m.state} · ${m.received}/${m.total} bytes (${pct}%)`+(m.err?` · err ${m.err}`:"");}
+    `target ${m.target} · ${otaStates[m.state]||m.state} · ${m.received}/${m.total} bytes (${pct}%)`+(m.err?` · err ${m.err}`:"");
+  // Radios are paused host-side for the whole transfer (see /api/ota) and
+  // resume automatically a couple seconds after OTA_END — mirror that window
+  // here so it's obvious from anywhere in the UI why nothing is capturing.
+  const ow=document.getElementById("ota-warn");
+  if(ow){const show=m.state>=1&&m.state<=4;ow.style.display=show?"inline-block":"none";
+    if(show)ow.textContent=`⚠ OTA ${pct}% — all radios paused`;}}
 
 const j=u=>fetch(u).then(r=>r.json()).catch(()=>null);
 
@@ -469,11 +557,11 @@ function addrLabel(hex){return addrName(hex)||hex;}
 
 // Seed the live-frames table from the DB (the WS only carries frames that arrive
 // after the page loads — so without this, earlier captures show as an empty list).
-async function loadFrames(){const p=await j("/api/frames");if(!p)return;
+async function loadFrames(){const p=await j("/api/frames?limit=2000");if(!p)return;
   const seen=new Set(frames.map(f=>f.ts+"/"+f.summary));
-  const seed=p.map(x=>({ts:x.ts,channel:x.channel,rssi:x.rssi,lqi:x.lqi,type:x.type,summary:x.summary,decrypted:x.decrypted,raw:x.raw}))
+  const seed=p.map(x=>({ts:x.ts,radio:x.radio,channel:x.channel,rssi:x.rssi,lqi:x.lqi,type:x.type,summary:x.summary,decrypted:x.decrypted,raw:x.raw}))
     .filter(f=>!seen.has(f.ts+"/"+f.summary));
-  frames=frames.concat(seed).sort((a,b)=>b.ts-a.ts).slice(0,200);}
+  frames=frames.concat(seed).sort((a,b)=>b.ts-a.ts).slice(0,2000);}
 
 async function loadDevices(){const d=await j("/api/devices");if(!d)return;devices=d;
   document.getElementById("d-cnt").textContent=d.length;
@@ -486,7 +574,8 @@ async function loadDevices(){const d=await j("/api/devices");if(!d)return;device
    const netr=x.net_rssi!=null?`${x.net_rssi}`:'<span class=dim>—</span>';
    const nm=x.name?x.name:(x.mfg?`<span class=dim style="font-style:italic" title="identified by manufacturer (OUI) — no device name available">${x.mfg}</span>`:"");
    const ftag=x.foreign?` <span class="tag" title="on another network (PAN ${x.pan||"?"}) — not your Zigbee network">foreign</span>`:"";
-   return `<tr class=click data-addr="${x.addr}"><td class=mono>${x.addr}</td><td>${nm}${ftag}</td><td>${role}</td>`+
+   const wtag=watchedAddrs.has(x.addr)?' <span title="watched — flagged as a target for join/rejoin + analysis">👁</span>':"";
+   return `<tr class=click data-addr="${x.addr}"><td class=mono>${x.addr}</td><td>${nm}${ftag}${wtag}</td><td>${role}</td>`+
    `<td>${x.last_rssi??""}</td><td class="${qClass(q)}">${q!=null?q+"%":""}</td><td>${net}</td><td class=dim>${netr}</td><td>${x.count}</td>`+
    `<td class=dim>${x.last_seen?ageStr(x.last_seen):""}</td></tr>`;}).join("")||
    `<tr><td colspan=9 class=dim>no devices yet — is the channel right? click “Scan spectrum” to check noise.</td></tr>`;
@@ -616,6 +705,11 @@ let lastFrame=null;
 // On-demand drawer results (trace / interrogation) cached per device, so the
 // 3-second drawer auto-refresh doesn't wipe them when it rebuilds the drawer.
 let traceCache={},intgCache={};
+// <details> open/closed state per device+block, for the same reason — each
+// showDetail() rebuild recreates fresh <details> elements (closed by
+// default), which without this would silently re-close anything the user
+// just opened the moment the periodic refresh ticks.
+let detailsOpen={};
 function hexdump(hexstr){const b=hexstr.match(/../g)||[];let out="";
   for(let i=0;i<b.length;i+=16){const row=b.slice(i,i+16);
     const off=i.toString(16).padStart(4,"0");
@@ -651,6 +745,13 @@ async function showFrame(f){if(!f||!f.raw){alert("No raw bytes for this frame (o
   document.getElementById("drawer").classList.add("open");}
 document.getElementById("frames").addEventListener("click",e=>{
   const tr=e.target.closest("tr[data-fi]");if(!tr)return;showFrame(frames[+tr.dataset.fi]);});
+async function loadDemoStatus(){
+  const s=await j("/api/demo/status");if(!s)return;
+  const badge=document.getElementById("demo-badge");
+  if(badge)badge.style.display=s.demo?"inline-block":"none";
+  const banner=document.getElementById("no-hw-banner");
+  if(banner)banner.style.display=s.no_hardware_detected?"flex":"none";
+}
 async function loadConn(){
   const s=await j("/api/stats");const e=document.getElementById("connstats");
   if(s){
@@ -680,7 +781,8 @@ function bindRows(){document.querySelectorAll("#devices tr.click").forEach(tr=>
 
 // ---- routing graph: radial BFS from the coordinator, LQI-coloured edges ----
 // Force-directed routing graph (HA-style physics) with cached, stable positions.
-let rgScale=1,rgTx=0,rgTy=0,showLeaves=true,showForeign=true,rgForeign={},rgChan={},rgPos={},rgSig="";
+const RG_MIN_SCALE=0.1,RG_MAX_SCALE=6;
+let rgScale=1,rgTx=0,rgTy=0,showLeaves=true,showForeign=true,rgForeign={},rgChan={},rgType={},rgArea={},rgPos={},rgSig="";
 let rgSx=1,rgSy=1,rgIsolate="",rgShowNetLqi=false,rgDist={},rgNetLqi={};
 const RGCX=300,RGCY=170;
 let rgNodes=[],rgEdges=[],rgNameOf={},rgDeg={},rgAlpha=0,rgDirty=true,rgStarted=false;
@@ -694,9 +796,11 @@ function bfsPath(adj,from,to){if(from===to)return [from];
 function renderGraph(){
   const svg=document.getElementById("routing");
   const adj=new Map(),nodes=new Set(),nameOf={},deg={};
-  rgForeign={};rgChan={};
+  rgForeign={};rgChan={};rgType={};rgArea={};
   (routing.nodes||[]).forEach(n=>{nodes.add(n.addr);nameOf[n.addr]=n.name||n.mfg;
-    if(n.foreign){rgForeign[n.addr]=true;rgChan[n.addr]=n.last_channel;}});
+    if(n.foreign){rgForeign[n.addr]=true;rgChan[n.addr]=n.last_channel;}
+    if(n.device_type)rgType[n.addr]=n.device_type;
+    if(n.area)rgArea[n.addr]=n.area;});
   (routing.edges||[]).forEach(e=>{nodes.add(e.src);nodes.add(e.dst);
     (adj.get(e.src)||adj.set(e.src,new Set()).get(e.src)).add(e.dst);
     (adj.get(e.dst)||adj.set(e.dst,new Set()).get(e.dst)).add(e.src);});
@@ -712,11 +816,44 @@ function renderGraph(){
     const path=bfsPath(adj,rgIsolate,COORD);
     shown=new Set(path&&path.length?path:[rgIsolate,COORD]);}
   // Every shown endpoint with no observed link gets a dashed "parent unknown"
-  // line to the coordinator so nothing floats unconnected.
+  // line to the coordinator so nothing floats unconnected — except foreign-
+  // network nodes, which by definition aren't part of this coordinator's mesh
+  // at all, so a line to it (dashed or not) would misleadingly suggest one.
   const edges=[];
   (routing.edges||[]).forEach(e=>{if(shown.has(e.src)&&shown.has(e.dst))
     edges.push({src:e.src,dst:e.dst,rssi:e.rssi,lqi:e.lqi,dashed:false});});
-  for(const a of shown){if(a!==COORD&&deg[a]===0)edges.push({src:a,dst:COORD,dashed:true});}
+  for(const a of shown){if(a!==COORD&&deg[a]===0&&!rgForeign[a])edges.push({src:a,dst:COORD,dashed:true});}
+  // A single isolated node is caught above, but a small cluster that only
+  // relays laterally through each other (e.g. two routers that have each been
+  // heard talking to one another, but neither has ever been heard relaying
+  // toward the coordinator's side of the mesh) is internally connected
+  // (deg>0 for all of them) yet unreachable from the coordinator as a whole —
+  // it'd otherwise float wherever the physics settles it, indistinguishable
+  // from a rendering bug. Find any such component and anchor it with one
+  // dashed line so it's visibly "not yet linked to the tree" instead.
+  {
+    const radj=new Map();
+    edges.forEach(e=>{(radj.get(e.src)||radj.set(e.src,new Set()).get(e.src)).add(e.dst);
+      (radj.get(e.dst)||radj.set(e.dst,new Set()).get(e.dst)).add(e.src);});
+    const reached=new Set([COORD]);{const q=[COORD];
+      while(q.length){const n=q.shift();for(const m of (radj.get(n)||[]))if(!reached.has(m)){reached.add(m);q.push(m);}}}
+    const unreached=new Set([...shown].filter(a=>a!==COORD&&!reached.has(a)));
+    const seen=new Set();
+    for(const start of unreached){
+      if(seen.has(start))continue;
+      const comp=[start];seen.add(start);const q=[start];
+      while(q.length){const n=q.shift();for(const m of (radj.get(n)||[]))
+        if(unreached.has(m)&&!seen.has(m)){seen.add(m);comp.push(m);q.push(m);}}
+      // A component made up entirely of foreign-network nodes isn't part of
+      // this mesh at all — same reasoning as the single-node case above, skip
+      // the misleading anchor to the coordinator and let it float freely.
+      if(comp.every(a=>rgForeign[a]))continue;
+      // Anchor via whichever member has the most observed traffic — the most
+      // "real" router of the bunch, not that it's necessarily the true parent.
+      const rep=comp.reduce((best,a)=>(deg[a]>deg[best]?a:best),comp[0]);
+      edges.push({src:rep,dst:COORD,dashed:true});
+    }
+  }
   // BFS hop-distance from the coordinator (to pick the "child" end of each link).
   rgDist={};rgDist[COORD]=0;{const q=[COORD];const a2=new Map();
     edges.forEach(e=>{(a2.get(e.src)||a2.set(e.src,new Set()).get(e.src)).add(e.dst);
@@ -773,21 +910,44 @@ function rgDraw(){const svg=document.getElementById("routing");if(!rgNodes.lengt
   const light=document.body.classList.contains("light");
   const lblc=light?"#39434f":"#aeb9c4",stroke=light?"#ffffff":"#0d1117";
   for(const a of rgNodes){const P=rgPos[a];if(!P)continue;const p=rgPX(P);
-    const fgn=rgForeign[a],isC=a===COORD,leaf=rgDeg[a]<=1,r=(isC?9:(leaf?4.5:6.5))/Math.sqrt(rgScale),
-      fill=isC?"#58a6ff":(fgn?"#bc8cff":(rgDeg[a]===0?"#f85149":(leaf?"#8b97a3":(light?"#7b8794":"#c9d4e0"))));
+    const fgn=rgForeign[a],isC=a===COORD,leaf=rgDeg[a]<=1,dt=rgType[a],
+      // Prefer ZHA's own Router/EndDevice classification (dt) for BOTH size
+      // and color, over guessing from observed edge degree — degree is only
+      // a fallback for a device HA hasn't reported on yet, and using it for
+      // size while dt drove color caused a big-but-grey mismatch for a known
+      // EndDevice that happens to have a graph edge (e.g. a dashed fallback).
+      small=dt?dt!=="Router":leaf,
+      r=(isC?9:(small?4.5:6.5))/Math.sqrt(rgScale),
+      // EndDevice reuses the same neutral grey as the "unclassified leaf"
+      // fallback below (not a second teal) so it's unambiguous at a glance
+      // against Router's cyan — two similar cyan shades read as "the same
+      // color" at this size on a dark background.
+      fill=isC?"#58a6ff":(fgn?"#bc8cff":(rgDeg[a]===0?"#f85149":
+        dt==="Router"?"#22b8cf":dt==="EndDevice"?"#8b97a3":
+        (leaf?"#8b97a3":(light?"#7b8794":"#c9d4e0"))));
     const lbl=(isC?"coordinator":(rgNameOf[a]||a))+(fgn?`/FGN:${rgChan[a]||"?"}`:"");
+    const area=!isC&&rgArea[a];
     if(P.fixed)s+=`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${(r+2.5).toFixed(1)}" fill="none" stroke="#58a6ff" stroke-width="${(1.2/rgScale).toFixed(2)}" opacity=".8"/>`;
-    s+=`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${r.toFixed(1)}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" data-addr="${a}"/>`;
-    s+=`<text x="${p.x.toFixed(1)}" y="${(p.y-r-3/rgScale).toFixed(1)}" font-size="${fs}" fill="${lblc}" text-anchor="middle">${lbl}</text>`;}
+    if(isC||dt==="Router"){ // square = routing-capable (coordinator + routers), matching HA's own network-map convention
+      const sz=(r*1.7).toFixed(1),half=(r*0.85);
+      s+=`<rect x="${(p.x-half).toFixed(1)}" y="${(p.y-half).toFixed(1)}" width="${sz}" height="${sz}" rx="${(r*0.4).toFixed(1)}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" data-addr="${a}"/>`;
+    } else { // circle = end device / unclassified leaf (doesn't route)
+      s+=`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${r.toFixed(1)}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" data-addr="${a}"/>`;
+    }
+    // Two-line label when a room is known (name above, room below — HA's own
+    // network-map convention), else just the name as before.
+    const nameY=area?(p.y-r-3/rgScale-11/rgScale):(p.y-r-3/rgScale);
+    s+=`<text x="${p.x.toFixed(1)}" y="${nameY.toFixed(1)}" font-size="${fs}" fill="${lblc}" text-anchor="middle">${lbl}</text>`;
+    if(area)s+=`<text x="${p.x.toFixed(1)}" y="${(p.y-r-3/rgScale).toFixed(1)}" font-size="${(fs*0.85).toFixed(1)}" fill="${light?'#8b97a3':'#6b7684'}" text-anchor="middle">${area}</text>`;}
   svg.innerHTML=`<g id="rg-g" transform="translate(${rgTx},${rgTy}) scale(${rgScale})">${s}</g>`;
 }
 function bindGraphZoom(){const svg=document.getElementById("routing");
   // Delegated click (the SVG is rebuilt every frame, so per-node handlers won't do).
   let moved=false;
-  svg.addEventListener("click",e=>{if(moved)return;const c=e.target.closest("circle[data-addr]");
+  svg.addEventListener("click",e=>{if(moved)return;const c=e.target.closest("[data-addr]");
     if(c)showDetail(c.dataset.addr);});
   svg.addEventListener("wheel",e=>{e.preventDefault();const f=e.deltaY<0?1.12:0.89;
-    const ns=Math.max(0.4,Math.min(6,rgScale*f));
+    const ns=Math.max(RG_MIN_SCALE,Math.min(RG_MAX_SCALE,rgScale*f));
     const r=svg.getBoundingClientRect(),mx=(e.clientX-r.left)/r.width*600,my=(e.clientY-r.top)/r.height*340;
     rgTx=mx-(mx-rgTx)*(ns/rgScale);rgTy=my-(my-rgTy)*(ns/rgScale);rgScale=ns;
     rgReheat(0.4);},{passive:false}); // nudge the physics so it re-spaces as you zoom
@@ -799,7 +959,7 @@ function bindGraphZoom(){const svg=document.getElementById("routing");
     const gx=(vx-rgTx)/rgScale,gy=(vy-rgTy)/rgScale;
     return {x:RGCX+(gx-RGCX)/(rgSx||1),y:RGCY+(gy-RGCY)/(rgSy||1)};}
   svg.addEventListener("mousedown",e=>{moved=false;downXY={x:e.clientX,y:e.clientY};
-    const c=e.target.closest("circle[data-addr]");
+    const c=e.target.closest("[data-addr]");
     if(c&&c.dataset.addr!==COORD){dragNode=c.dataset.addr;svg.style.cursor="grabbing";e.preventDefault();return;}
     drag={x:e.clientX,y:e.clientY,tx:rgTx,ty:rgTy};svg.style.cursor="grabbing";e.preventDefault();});
   window.addEventListener("mousemove",e=>{
@@ -813,6 +973,23 @@ function bindGraphZoom(){const svg=document.getElementById("routing");
     moved=true;
     rgTx=drag.tx+(e.clientX-drag.x)/r.width*600;rgTy=drag.ty+(e.clientY-drag.y)/r.height*340;rgDirty=true;});
   window.addEventListener("mouseup",()=>{drag=null;dragNode=null;downXY=null;svg.style.cursor="grab";});}
+// "Zoom extents": frame every currently-visible node (post spacing, pre pan/zoom)
+// inside the viewBox, whatever the window/fullscreen size — works in both since
+// the viewBox stays a fixed 600x340 and scales via preserveAspectRatio.
+function rgFitExtents(){
+  if(!rgNodes.length)return;
+  let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+  for(const a of rgNodes){const P=rgPos[a];if(!P)continue;const p=rgPX(P);
+    minX=Math.min(minX,p.x);maxX=Math.max(maxX,p.x);
+    minY=Math.min(minY,p.y);maxY=Math.max(maxY,p.y);}
+  if(!isFinite(minX))return;
+  const margin=32; // node radius + label/room text
+  const w=Math.max(1,maxX-minX+margin*2),h=Math.max(1,maxY-minY+margin*2);
+  const cx=(minX+maxX)/2,cy=(minY+maxY)/2;
+  rgScale=Math.max(RG_MIN_SCALE,Math.min(RG_MAX_SCALE,Math.min(600/w,340/h)));
+  rgTx=300-cx*rgScale;rgTy=170-cy*rgScale;
+  rgDirty=true;
+}
 
 // ---- device detail drawer ----
 function capsHtml(di){
@@ -833,6 +1010,36 @@ function capsHtml(di){
     if(ep.out&&ep.out.length)h+=`<div style="font-size:11px"><span class=dim>out&nbsp;</span>${ep.out.map(cl).join(", ")}</div>`;
   });
   return h;}
+// Renders the analysis findings list with the same .diag markup/severity
+// colours as the mesh-wide Diagnostics panel, for a consistent read.
+function analysisFindingsHtml(findings){
+  const rank={critical:0,error:1,warning:2,notice:3,info:4};
+  const sorted=[...(findings||[])].sort((a,b)=>(rank[a.severity]??9)-(rank[b.severity]??9));
+  if(!sorted.length)return '<div class=dim style="font-size:11px">no findings yet</div>';
+  return sorted.map(x=>`<div class="diag ${x.severity}"><span class=sev>${x.severity}</span>`+
+    `<span class=cat>${x.category}</span><span class=msg>${annotate(x.message)}</span></div>`).join("");}
+// Compact timeline of this device's own silence/recovery incidents (its full
+// history, not just the last few in the mesh-wide feed).
+function analysisTimelineHtml(incidents){
+  if(!incidents||!incidents.length)return '<div class=dim style="font-size:11px">no silence/recovery/rejoin incidents logged for this device yet</div>';
+  const rows=[...incidents].reverse().slice(0,25);
+  return `<table><thead><tr><th>When</th><th>Event</th><th>Silent for</th><th>Ch</th><th>Energy</th></tr></thead><tbody>`+
+    rows.map(x=>{const rc=x.reason==='recovered'?'good':(x.reason==='silence'?'weak':(x.reason==='rejoin'?'good':''));
+      const rl=x.reason==='silence'?'went silent':(x.reason==='recovered'?'recovered':(x.reason==='rejoin'?'⭐ rejoined (Association/Orphan/re-announce)':x.reason));
+      return `<tr><td class=dim>${whenStr(x.ts)}</td><td class="${rc}">${rl}</td>`+
+        `<td>${x.silent_s?x.silent_s+'s':''}</td><td class=dim>${x.channel??''}</td><td class=dim>${x.ed?x.ed+'dBm':''}</td></tr>`;}).join("")+
+    `</tbody></table>`;}
+// Home Assistant's own ZHA/zigpy log entries mentioning this device — the
+// software layer a passive sniffer can't see (a command that never made it
+// onto the air, a timeout, an exception inside the integration).
+function haLogsHtml(logs){
+  if(!logs||!logs.length)return '<div class=dim style="font-size:11px">no matching entries in HA\'s system log (Settings → System → Logs) — either nothing logged, or HA isn\'t connected</div>';
+  const rows=[...logs].sort((a,b)=>b.ts-a.ts).slice(0,25);
+  const lc=l=>l==='ERROR'?'weak':(l==='WARNING'?'fair':'dim');
+  return `<table><thead><tr><th>When</th><th>Level</th><th>Message</th></tr></thead><tbody>`+
+    rows.map(x=>`<tr><td class=dim>${whenStr(x.ts)}</td><td class="${lc(x.level)}">${x.level}${x.count>1?` ×${x.count}`:""}</td>`+
+      `<td>${x.message}${x.exception?`<div class=dim style="font-size:10px;white-space:pre-wrap">${x.exception}</div>`:""}</td></tr>`).join("")+
+    `</tbody></table>`;}
 async function showDetail(addr){if(!addr||addr==="—")return;selected=addr;
   const dev=devices.find(d=>d.addr===addr)||{addr};
   document.getElementById("d-title").textContent=(dev.name?dev.name+" · ":"")+addr;
@@ -840,15 +1047,28 @@ async function showDetail(addr){if(!addr||addr==="—")return;selected=addr;
   const ph=(await j(`/api/probe_history?addr=${addr}`))||{history:[]};
   const phist=ph.history||[];
   const di=(await j(`/api/device_info?addr=${addr}`))||{};
+  const an=(await j(`/api/device_analysis?addr=${addr}`))||{};
   document.getElementById("dbody").innerHTML=
    `<div class=kv><div>Address</div><div class=mono>${addr}</div>`+
    `<div>Name</div><div>${dev.name||(dev.mfg?`<span class=dim style="font-style:italic">${dev.mfg}</span> <span class=dim>(manufacturer — no device name)</span>`:'<span class=dim>unknown — add --zha-backup, --ha-host, or pair Hue</span>')}</div>`+
-   `<div>Role</div><div>${dev.role||'<span class=dim>?</span>'}</div>`+
+   `<div>Role</div><div>${dev.device_type||dev.role||'<span class=dim>? — connect Home Assistant to see this</span>'}</div>`+
+   `<div>Area</div><div>${dev.area||'<span class=dim>? — connect Home Assistant to see this</span>'}</div>`+
+   `<div>HA reachability</div><div>${dev.ha_available===true?'<span class=good>● online (per HA)</span>':dev.ha_available===false?'<span class=weak>● offline (per HA)</span>':'<span class=dim>? — connect Home Assistant to see this</span>'}</div>`+
    `<div>Sniffer signal ⌖</div><div>${dev.last_rssi??'?'} dBm · <span class="${qClass(rssiQ(dev.last_rssi))}">${rssiQ(dev.last_rssi)!=null?rssiQ(dev.last_rssi)+'%':'?'}</span> <span class=dim>(heard at the sniffer's location)</span></div>`+
    `<div>Network signal</div><div>${dev.net_lqi!=null?`LQI <span class="${lqiClass(dev.net_lqi)}">${dev.net_lqi}</span>${dev.net_rssi?' · '+dev.net_rssi+' dBm':''} <span class=dim>(coordinator's view of the real link)</span>`:'<span class=dim>— connect Home Assistant to see this</span>'}</div>`+
    `<div>Raw sniffer LQI</div><div class=dim>${dev.last_lqi??'?'} <span class=dim>(C6 LQI reads low — prefer RSSI/quality)</span></div>`+
    `<div>Frames seen</div><div>${dev.count??0}</div>`+
-   `<div>Channel</div><div>${dev.last_channel??'?'}</div></div>`+
+   `<div>Channel</div><div>${dev.last_channel??'?'}</div>`+
+   `<div>Network</div><div>${dev.pan?(dev.foreign
+     ?`<span class=weak>${dev.pan} — foreign network</span> <span class=dim>(a different PAN sharing this channel — not your Zigbee network)</span>`
+     :`${dev.pan} <span class="tag coord">yours</span>`)
+     :'<span class=dim>PAN unknown — no NWK-layer frame decoded from this device yet</span>'}</div></div>`+
+   `<h2 style="font-size:12px;color:var(--dim);text-transform:uppercase;margin-top:14px">Why is it going unresponsive? <span class=dim style="text-transform:none;font-weight:400">mined from every record for this device</span></h2>`+
+   `<div class=diags style="margin-bottom:8px">`+analysisFindingsHtml(an.findings)+`</div>`+
+   `<details id="d-silence-details"${detailsOpen[addr+':silence']?' open':''}><summary style="cursor:pointer;font-size:11px;color:var(--dim)">Silence/rejoin timeline (${(an.incidents||[]).filter(x=>x.reason==='silence').length} drop${(an.incidents||[]).filter(x=>x.reason==='silence').length===1?'':'s'}, ${(an.incidents||[]).filter(x=>x.reason==='rejoin').length} rejoin${(an.incidents||[]).filter(x=>x.reason==='rejoin').length===1?'':'s'})</summary>`+
+   `<div style="margin-top:6px">`+analysisTimelineHtml(an.incidents)+`</div></details>`+
+   `<details id="d-halog-details" style="margin-top:6px"${detailsOpen[addr+':halog']?' open':''}><summary style="cursor:pointer;font-size:11px;color:var(--dim)">Home Assistant / zigpy log (${(an.ha_logs||[]).length})</summary>`+
+   `<div style="margin-top:6px">`+haLogsHtml(an.ha_logs)+`</div></details>`+
    `<h2 style="font-size:12px;color:var(--dim);text-transform:uppercase;margin-top:14px;display:flex;justify-content:space-between;align-items:center">Capabilities <button id="d-reint" style="font-size:11px;padding:2px 8px" title="re-pull this device's endpoints/clusters from the coordinator (ZHA)">Re-interview</button></h2>`+
    capsHtml(di)+
    `<h2 style="font-size:12px;color:var(--dim);text-transform:uppercase;margin-top:14px;display:flex;justify-content:space-between;align-items:center">Path from coordinator <button id="d-trace" style="font-size:11px;padding:2px 8px">Trace</button></h2>`+
@@ -862,6 +1082,9 @@ async function showDetail(addr){if(!addr||addr==="—")return;selected=addr;
    `<table><thead><tr><th>Time</th><th>Radio</th><th>Result</th><th>RSSI⌖</th></tr></thead><tbody id="d-probes">`+
    phist.slice(0,12).map(h=>`<tr><td class=dim>${fmtTime(h.ts)}</td><td>${h.radio}</td><td class="${h.acked?'good':'weak'}">${h.acked?'✓ ACK':'✗ no ACK'}</td><td>${h.acked?h.rssi:''}</td></tr>`).join("")+
    (phist.length?'':'<tr><td colspan=4 class=dim>no probes yet — hit “Probe now”</td></tr>')+`</tbody></table>`+
+   `<h2 style="font-size:12px;color:var(--dim);text-transform:uppercase;margin-top:14px;display:flex;justify-content:space-between;align-items:center">Watch for join/rejoin <button id="d-watch" style="font-size:11px;padding:2px 8px">…</button></h2>`+
+   `<div class=dim style="font-size:11px;margin-bottom:6px">Watches this address for any on-air activity — flags Association/Rejoin/Device-announce frames as a likely (re)join, without you babysitting Live Frames.</div>`+
+   `<div id="d-watch-log">`+watchLogHtml(addr)+`</div>`+
    `<h2 style="font-size:12px;color:var(--dim);text-transform:uppercase;margin-top:14px">Recent messages (${msgs.length})</h2>`+
    `<table><thead><tr><th>Time</th><th>RSSI</th><th>Type</th><th>Summary</th></tr></thead><tbody>`+
    msgs.map(m=>`<tr><td class=dim>${fmtTime(m.ts)}</td><td>${m.rssi}</td><td>${m.type}${m.decrypted?' <span class=lock>🔓</span>':''}</td><td>${annotate(m.summary)}</td></tr>`).join("")+
@@ -869,6 +1092,14 @@ async function showDetail(addr){if(!addr||addr==="—")return;selected=addr;
   // Restore any on-demand results so the periodic refresh doesn't blank them.
   if(traceCache[addr])document.getElementById("d-trace-out").innerHTML=traceCache[addr];
   if(intgCache[addr])document.getElementById("d-intg-out").innerHTML=intgCache[addr];
+  // <details> are recreated (closed) on every rebuild — the "open" attribute
+  // above already restores prior state; this just keeps tracking it as the
+  // user toggles, since the element (and any old listener on it) is replaced
+  // wholesale each render.
+  const sd=document.getElementById("d-silence-details");
+  if(sd)sd.ontoggle=()=>{detailsOpen[addr+':silence']=sd.open;};
+  const hd=document.getElementById("d-halog-details");
+  if(hd)hd.ontoggle=()=>{detailsOpen[addr+':halog']=hd.open;};
   const pb=document.getElementById("d-probe");
   if(pb)pb.onclick=async()=>{const p=document.getElementById("at-radio")?document.getElementById("at-radio").value:"";
     if(!p&&!await gateFn("probe"))return;
@@ -894,21 +1125,66 @@ async function showDetail(addr){if(!addr||addr==="—")return;selected=addr;
     else html=`<div class=dim style="margin-bottom:4px">via ${t.source} · ${t.hops.length} hop${t.hops.length>1?"s":""}</div>`+
       t.hops.map((h,i)=>`<div style="padding:2px 0">${i===0?"📡":"&nbsp;&nbsp;".repeat(i)+"└→"} <b>${h.name||h.addr}</b> <span class="dim mono">${h.addr}</span>${h.lqi!=null?` · <span class="${lqiClass(h.lqi)}">LQI ${h.lqi}</span>`:""}</div>`).join("");
     out.innerHTML=html;traceCache[addr]=html;};
+  const wb=document.getElementById("d-watch");
+  if(wb){
+    const watching=watchedAddrs.has(addr);
+    wb.textContent=watching?"👁 Watching — stop":"👁 Watch";
+    wb.classList.toggle("on",watching);
+    wb.onclick=async()=>{
+      if(watchedAddrs.has(addr)){await post(`/api/watch_remove?addr=${addr}`);watchedAddrs.delete(addr);}
+      else{await post(`/api/watch_add?addr=${addr}`);watchedAddrs.add(addr);}
+      showDetail(addr);};
+  }
   document.getElementById("drawer").classList.add("open");}
 document.getElementById("dclose").onclick=()=>{document.getElementById("drawer").classList.remove("open");selected=null;};
 
+const modeNames=["idle","capture","ed-sweep","capture+ed"];
 function render(){setConn();
-  if(status){document.getElementById("m-ch").textContent=status.channel;
-    document.getElementById("m-cap").textContent=status.captured;
-    document.getElementById("m-drop").textContent=status.dropped_buf;}
+  // "ch" here is a single value — show it only when every radio agrees;
+  // otherwise say "multi" so it doesn't silently disagree with the header's
+  // own R0/R1-per-channel breakdown just to its left.
+  const chs=[...new Set(Object.values(radioStatus).map(m=>m.channel))];
+  document.getElementById("m-ch").textContent=chs.length===1?chs[0]:(chs.length>1?"multi":(status?status.channel:"—"));
+  // Aggregate across every known radio, not just this port's own (radio 0) —
+  // captured comes from the host-counted, clearable per-radio tally (see
+  // loadRadios' radiosFramesSum); dropped is summed live from each radio's
+  // own STATUS heartbeat (device-reported, so not itself clearable).
+  document.getElementById("m-cap").textContent=radiosFramesSum;
+  document.getElementById("m-drop").textContent=
+    Object.values(radioStatus).reduce((a,m)=>a+(m.dropped_buf||0),0);
   renderStatus();
-  document.getElementById("frames").innerHTML=frames.slice(0,80).map((f,i)=>
-   `<tr class=click data-fi="${i}" title="click to inspect this frame"><td class=dim>${fmtTime(f.ts)}</td><td>${f.channel}</td><td>${f.rssi}</td><td class="${lqiClass(f.lqi)}">${f.lqi}</td>`+
-   `<td>${f.type}${f.decrypted?' <span class=lock>🔓</span>':''}</td><td>${annotate(f.summary)}</td></tr>`).join("");
+  // Per-radio stats table — the actual breakdown, not just the header totals.
+  const rsIds=Object.keys(radioStatus).map(Number).sort((a,b)=>a-b);
+  document.getElementById("radio-stats").innerHTML=rsIds.length?rsIds.map(id=>{const m=radioStatus[id];
+    return `<tr><td>R${id}</td><td>${m.channel??"?"}</td><td>${modeNames[m.mode_id]||"?"}</td>`+
+      `<td>${m.captured??0}</td><td>${m.dropped_buf??0}</td><td class=dim>${m.uptime_s??0}s</td></tr>`;}).join("")
+    :'<tr><td colspan=6 class=dim>no radios reporting yet</td></tr>';
+  const fRadio=document.getElementById("f-radio").value;
+  const fType=document.getElementById("f-type").value;
+  const fSearch=document.getElementById("f-search").value.trim().toLowerCase();
+  const filtered=[];
+  for(let i=0;i<frames.length;i++){const f=frames[i];
+    if(fRadio!==""&&String(f.radio??0)!==fRadio)continue;
+    if(fType&&f.type!==fType)continue;
+    if(fSearch&&!(f.summary||"").toLowerCase().includes(fSearch))continue;
+    filtered.push(i);
+    if(filtered.length>=800)break;}
+  document.getElementById("f-cnt").textContent=
+    filtered.length===frames.length?`${frames.length} frames`:`${filtered.length} / ${frames.length} frames`;
+  document.getElementById("frames").innerHTML=filtered.map(i=>{const f=frames[i];
+   return `<tr class=click data-fi="${i}" title="click to inspect this frame"><td class=dim>${fmtTime(f.ts)}</td><td>R${f.radio??0}</td><td>${f.channel}</td><td>${f.rssi}</td><td class="${lqiClass(f.lqi)}">${f.lqi}</td>`+
+   `<td>${f.type}${f.decrypted?' <span class=lock>🔓</span>':''}</td><td>${annotate(f.summary)}</td></tr>`;}).join("");
   updateCapInd();
 }
 
 let capPrev=-1,capActiveTs=0,capStopped=false;
+// Short label for one radio's last-known STATUS, for the multi-radio header.
+function radioLabel(m){
+  if(!m)return "?";
+  if(m.mode_id===0)return "idle";
+  if(m.mode_id===2)return "ED sweep";
+  if(m.mode_id===1||m.mode_id===3)return `capturing · ch ${m.channel??"?"}`;
+  return "?";}
 function updateCapInd(){
   const s=status||{},mode=s.mode_id,cap=s.captured??0;
   const hw=document.getElementById("hop-warn");
@@ -922,11 +1198,22 @@ function updateCapInd(){
   else if(mode===2){cls="sweep";txt="◐ ED sweep";}
   else if(mode===1||mode===3){if(active){cls="run";txt=`capturing · ch ${s.channel??"?"}`;}
     else{cls="quiet";txt="capture mode · no new frames";}}
-  // Drive both the panel badge and the always-visible header badge, so capture
-  // status is shown on every tab (capture runs device-side and never stops on a
-  // tab switch — only Stop ends it).
-  for(const id of ["cap-ind","cap-ind-hdr"]){const el=document.getElementById(id);
-    if(el){el.className="capind "+cls;el.textContent=txt;}}}
+  // Both badges (header, always visible; and the Capture Controls panel's own)
+  // show the same thing: with one radio, that radio's state; with more than
+  // one, every radio's state side by side — never just radio 0's, since with
+  // multiple radios "capturing · ch 25" alone would silently misrepresent
+  // whatever the other radio(s) are doing.
+  const ids=Object.keys(radioStatus).map(Number).sort((a,b)=>a-b);
+  let multiCls=cls,multiTxt=txt;
+  if(ids.length>1){
+    const anyActive=ids.some(id=>[1,2,3].includes(radioStatus[id].mode_id));
+    multiCls=anyActive?"run":"idle";
+    multiTxt=ids.map(id=>`R${id}: ${radioLabel(radioStatus[id])}`).join("   ·   ");
+  }
+  for(const el of [document.getElementById("cap-ind"),document.getElementById("cap-ind-hdr")]){
+    if(el){el.className="capind "+multiCls;el.textContent=multiTxt;}
+  }
+}
 
 // Server-driven radio allocation gate. Asks which radio would run `fn`; alerts
 // when none is free (listing what each radio is doing), confirms when the only
@@ -948,15 +1235,11 @@ on("c-stop",()=>{capStopped=true;updateCapInd();post("/api/stop");});
 document.getElementById("hop-warn").onclick=()=>{if(confirm("Pin the radio to your channel (stop hopping)? Hopping only captures your network part of the time."))post("/api/hop?dwell=0");};
 on("c-restart",async()=>{if(!await gateFn("capture"))return;capStopped=false;post("/api/start");});
 on("c-reset",()=>post("/api/reset_radio"));
-on("c-scan",async()=>{if(!await gateFn("spectrum"))return;post("/api/scan");});
-on("c-setch",()=>{const v=+document.getElementById("c-ch").value;if(v>=11&&v<=26)post("/api/set_channel?ch="+v);});
+on("f-clear",()=>{document.getElementById("f-radio").value="";document.getElementById("f-type").value="";document.getElementById("f-search").value="";});
+on("m-clear-stats",()=>{post("/api/reset_stats");radiosFramesSum=0;radioStatus={};frames=[];});
 on("c-hop",()=>{const d=+document.getElementById("c-dwell").value||0;post("/api/hop?dwell="+d);});
 on("c-setkey",()=>{const k=document.getElementById("c-key").value.trim();post("/api/key?k="+encodeURIComponent(k));});
 on("c-clearkey",()=>{document.getElementById("c-key").value="";post("/api/key?k=");});
-document.getElementById("c-mode").onchange=async e=>{const v=+e.target.value;
-  const act=(v===2)?"spectrum":(v===1||v===3)?"capture":null;
-  if(act&&!await gateFn(act)){e.target.value=status?status.mode_id:1;return;}
-  post("/api/mode?m="+v);};
 on("sp-scan",async()=>{if(!await gateFn("spectrum"))return;const d=+document.getElementById("sp-dwell").value||20;post("/api/scan?dwell="+d);});
 let spCont=false;
 on("sp-cont",async()=>{if(!spCont&&!await gateFn("spectrum"))return;spCont=!spCont;const b=document.getElementById("sp-cont");
@@ -970,12 +1253,23 @@ async function loadNetworks(){const r=await j("/api/networks");if(!r)return;
     const mine=n.pan.toLowerCase()===ours;
     const who=mine?'your Zigbee network':(n.label?`<b>${n.label}</b>`:'<span class=dim>neighbouring network</span>');
     const mon=(!mine&&n.channel)?` <a href="#" class="nw-mon" data-ch="${n.channel}" style="font-size:11px;margin-left:6px">monitor</a>`:"";
+    // Manual override for when the auto-detected "home" PAN goes stale (e.g.
+    // the network did a PAN-conflict change since the ZHA backup was taken)
+    // — every real device silently reads as foreign with no louder symptom
+    // than a broken routing tree, so this needs to be fixable by hand.
+    const setHome=!mine?` <a href="#" class="nw-sethome" data-pan="${n.pan}" style="font-size:11px;margin-left:6px" title="mark this PAN as your home network">set as home</a>`:"";
     return `<tr><td class=mono>${n.pan}${mine?' <span class="tag coord">yours</span>':' <span class="tag">foreign</span>'}</td>`+
       `<td>${n.channel||"–"}</td><td>${n.count}</td>`+
       `<td class=dim>${n.last_seen?ageStr(n.last_seen):""}</td>`+
-      `<td>${who}${mon}</td></tr>`;
+      `<td>${who}${mon}${setHome}</td></tr>`;
   }).join("")||'<tr><td colspan=5 class=dim>no networks seen yet — capture, or run a survey</td></tr>';
-  document.querySelectorAll(".nw-mon").forEach(a=>a.onclick=e=>{e.preventDefault();monitorNet(+a.dataset.ch);});}
+  document.querySelectorAll(".nw-mon").forEach(a=>a.onclick=e=>{e.preventDefault();monitorNet(+a.dataset.ch);});
+  document.querySelectorAll(".nw-sethome").forEach(a=>a.onclick=async e=>{e.preventDefault();
+    const pan=a.dataset.pan;
+    if(!confirm(`Mark ${pan} as your home network? Every device on it will switch from "foreign" to "yours", and vice versa for the network currently marked home.`))return;
+    const res=await postJ(`/api/set_home_network?pan=${pan}`);
+    if(!res||!res.ok){alert("failed to set home network"+(res&&res.reason?": "+res.reason:""));return;}
+    loadNetworks();loadDevices();loadRouting();loadDiagnostics();});}
 async function monitorNet(ch){
   const r=await fetch("/api/monitor"+(ch?"?channel="+ch:""),{method:"POST"}).then(x=>x.json()).catch(()=>null);
   const p=document.getElementById("nw-prog");
@@ -992,11 +1286,88 @@ async function startSurvey(active){if(!await gateFn("spectrum"))return;
 on("nw-survey",()=>startSurvey(false));
 on("nw-active",()=>startSurvey(true));
 on("nw-monitor",()=>monitorNet(0)); // 0 → auto: Hue channel first, else busiest foreign
+// ---- Channel airtime (frames/min by PAN + per-PAN RSSI histogram) ----
+// Fixed categorical palette (CVD-validated on both themes): ours is always
+// blue; foreign PANs take the rest in ascending-PAN order so a network keeps
+// its colour across refreshes; overflow and PAN-less frames (ACKs) are grey.
+const AIR_OURS="#4493f8",AIR_FOREIGN=["#db6d28","#1fa2ab","#a371f7","#db61a2"],AIR_GREY="#8b97a3";
+const AIR_BINS=["≤ −101","−100…−91","−90…−81","−80…−71","−70…−61","−60…−51","−50…−41","≥ −40"];
+let airWin=3600;
+function airColors(pans){const m={};let i=0;
+  pans.filter(p=>!p.ours&&p.pan_int>=0).map(p=>p.pan_int).sort((a,b)=>a-b)
+    .forEach(p=>{m[p]=i<AIR_FOREIGN.length?AIR_FOREIGN[i++]:AIR_GREY;});
+  return p=>p.ours?AIR_OURS:p.pan_int<0?AIR_GREY:m[p.pan_int];}
+function airWho(p){return p.ours?"your network":p.pan_int<0?"no PAN (ACKs etc.)":(p.label||"foreign network");}
+async function loadAirtime(){const r=await j("/api/airtime?window="+airWin);if(!r)return;
+  const pans=r.pans||[],color=airColors(pans);
+  document.getElementById("air-cnt").textContent=pans.length;
+  // --- stacked bars: merge minute buckets so the window fits ≤96 bars ---
+  const svg=document.getElementById("air-chart"),W=svg.clientWidth||640,H=140;
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
+  const b0=Math.floor(r.now/60)-Math.floor(r.window_s/60),b1=Math.floor(r.now/60);
+  const merge=Math.max(1,Math.ceil((b1-b0)/96)),nBars=Math.ceil((b1-b0)/merge);
+  // per-PAN frames per merged bar (stack order = legend order: loudest first)
+  const stacks=pans.map(p=>{const a=new Array(nBars).fill(0);
+    (p.series||[]).forEach(([b,f])=>{const i=Math.floor((b-b0)/merge);if(i>=0&&i<nBars)a[i]+=f;});return a;});
+  const totals=new Array(nBars).fill(0);stacks.forEach(a=>a.forEach((f,i)=>totals[i]+=f));
+  const maxT=Math.max(1,...totals),bw=W/nBars;
+  let h="";
+  for(let i=0;i<nBars;i++){if(!totals[i])continue;
+    let y=H;
+    const t0=fmtTime((b0+i*merge)*60),t1=fmtTime(Math.min(b1,b0+(i+1)*merge)*60);
+    pans.forEach((p,pi)=>{const f=stacks[pi][i];if(!f)return;
+      const hh=Math.max(1,f/maxT*(H-4));y-=hh;
+      h+=`<rect x="${(i*bw+0.5).toFixed(1)}" y="${y.toFixed(1)}" width="${Math.max(1,bw-1).toFixed(1)}" height="${(hh-1).toFixed(1)}" fill="${color(p)}" rx="1"><title>${p.pan} ${airWho(p)} — ${f.toLocaleString()} frames (${t0}–${t1}, ${p.series&&merge>1?merge+" min":"1 min"})</title></rect>`;});}
+  svg.innerHTML=h||`<text x="${W/2}" y="${H/2}" text-anchor="middle" fill="var(--dim)" font-size="12">no airtime recorded in this window yet — capture some frames</text>`;
+  const mid=(b0+b1)/2*60;
+  document.getElementById("air-x").innerHTML=totals.some(t=>t)
+    ?`<span>${fmtTime(b0*60)}</span><span>${fmtTime(mid)} · peak ${maxT.toLocaleString()} frames/${merge>1?merge+"min":"min"}</span><span>now</span>`:"";
+  // --- per-channel totals ---
+  const chans=r.channels||[],cmax=Math.max(1,...chans.map(c=>c.frames));
+  document.getElementById("air-chans").innerHTML=chans.length?chans.map(c=>
+    `<div style="display:flex;align-items:center;gap:8px;font-size:11px;margin:2px 0">
+      <span class=mono style="width:38px;text-align:right">ch ${c.channel}</span>
+      <div style="flex:1;height:8px;background:var(--panel2);border-radius:4px;overflow:hidden">
+        <div style="width:${Math.max(1,c.frames/cmax*100)}%;height:100%;background:var(--accent);opacity:.55;border-radius:4px"></div></div>
+      <span class=dim style="width:90px">${c.frames.toLocaleString()} frames</span></div>`).join(""):"";
+  // --- legend: one row per PAN with its RSSI histogram ---
+  const hmax=p=>Math.max(1,...p.hist);
+  document.getElementById("air-legend").innerHTML=pans.map(p=>{
+    const fpm=Math.round(p.frames/(r.window_s/60));
+    return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:5px 0;border-top:1px solid var(--line);font-size:12px">
+      <i style="width:12px;height:12px;border-radius:3px;background:${color(p)};flex:none"></i>
+      <span class=mono>${p.pan}</span>
+      ${p.ours?'<span class="tag coord">yours</span>':p.pan_int>=0?'<span class="tag">foreign</span>':''}
+      <span>${p.pan_int<0?'<span class=dim>no PAN (ACKs etc.)</span>':(p.label||'')}</span>
+      <span class=dim>ch ${(p.channels||[]).join(", ")||"–"}</span>
+      <span>${p.frames.toLocaleString()} frames <span class=dim>(~${fpm.toLocaleString()}/min)</span></span>
+      <span class=dim title="average RSSI as heard at the sniffer">avg ${p.rssi_avg} dBm ⌖</span>
+      <span style="display:flex;align-items:flex-end;gap:1px;height:22px" title="RSSI distribution (dBm, heard at the sniffer)">
+        ${p.hist.map((v,i)=>`<i style="width:7px;border-radius:1px 1px 0 0;background:${color(p)};opacity:${v?1:.15};height:${Math.max(2,v/hmax(p)*22)}px" title="${AIR_BINS[i]} dBm: ${v.toLocaleString()} frames"></i>`).join("")}
+      </span></div>`;}).join("")||"";}
+document.querySelectorAll("#air-win button").forEach(b=>b.onclick=()=>{
+  airWin=+b.dataset.w;
+  document.querySelectorAll("#air-win button").forEach(x=>x.classList.toggle("on",x===b));
+  loadAirtime();});
+loadAirtime();
 on("c-savekey",()=>post("/api/save_key"));
 on("cfg-silence-save",async()=>{const v=+document.getElementById("cfg-silence").value||120;
   await post("/api/incident_config?silence="+v);
   const s=document.getElementById("cfg-silence-stat");s.textContent="saved ✓ (applies within 20s)";
   setTimeout(()=>{s.textContent="";},2500);});
+const postJ=u=>fetch(u,{method:"POST"}).then(x=>x.json()).catch(()=>null);
+on("cfg-purge",async()=>{
+  if(!confirm("Purge all captured data? This clears frames, devices, routing/links, incidents, spectrum, and probe history — permanently, no undo. Your HA/Hue credentials, network key, and saved ports are kept.\n\nContinue?"))return;
+  const out=document.getElementById("cfg-danger-out");out.textContent="purging…";
+  const r=await postJ("/api/purge_data");
+  out.textContent=(r&&r.ok)?"✓ purged — reloading…":"✗ failed: "+((r&&r.reason)||"unknown error");
+  if(r&&r.ok)setTimeout(()=>location.reload(),900);});
+on("cfg-factory-reset",async()=>{
+  if(!confirm("⚠ FULL FACTORY RESET — this clears all captured data AND wipes your HA/Hue credentials, network key, saved ports/channel, and radio roles back to defaults. You'll need to reconnect HA/Hue and re-enter your network key afterward. This cannot be undone.\n\nContinue?"))return;
+  if(prompt('Type RESET (all caps) to confirm:')!=="RESET"){alert("Not confirmed — nothing was changed.");return;}
+  const out=document.getElementById("cfg-danger-out");out.textContent="resetting…";
+  const r=await postJ("/api/factory_reset");
+  out.textContent=(r&&r.ok)?"✓ reset — captured data is cleared now; RESTART zbsniff to finish resetting settings.":"✗ failed: "+((r&&r.reason)||"unknown error");});
 document.querySelectorAll("[data-exp]").forEach(b=>b.onclick=()=>{
   const fmt=document.getElementById("exp-fmt").value;
   window.open(`/api/export?what=${b.dataset.exp}&format=${fmt}`,"_blank");});
@@ -1009,6 +1380,37 @@ on("rg-reset",()=>{rgScale=1;rgTx=0;rgTy=0;rgSx=1;rgSy=1;
   for(const k in rgPos)delete rgPos[k].fixed; // release any dragged/pinned nodes
   document.getElementById("rg-sx").value=1;document.getElementById("rg-sy").value=1;rgReheat(0.9);
   savePref("rg_sx","1");savePref("rg_sy","1");});
+on("rg-fit",()=>rgFitExtents());
+on("rg-fullscreen",()=>{const el=document.getElementById("routing-panel");
+  if(document.fullscreenElement)document.exitFullscreen();
+  else el.requestFullscreen().catch(()=>alert("Fullscreen not available in this browser/context."));});
+document.addEventListener("fullscreenchange",()=>{
+  document.getElementById("rg-fullscreen").textContent=document.fullscreenElement?"⛶ Exit fullscreen":"⛶ Fullscreen";
+  rgReheat(0.5);}); // let the physics re-settle at the new size
+// Render the current SVG graph to an offscreen canvas and download it as a PNG.
+// SVG->canvas needs the image data URI-encoded (not just serialized), and a
+// draw+export round trip since <canvas> can't be saved to a file directly.
+on("rg-png",()=>{const svg=document.getElementById("routing");
+  const svgXml=new XMLSerializer().serializeToString(svg);
+  const svgUri="data:image/svg+xml;charset=utf-8,"+encodeURIComponent(svgXml);
+  const bg=document.body.classList.contains("light")?"#ffffff":"#0d1117";
+  const scale=2; // render at 2x for a crisper download than the on-screen size
+  const img=new Image();
+  img.onload=()=>{
+    const vb=svg.viewBox.baseVal;
+    const w=(vb&&vb.width)||svg.clientWidth,h=(vb&&vb.height)||svg.clientHeight;
+    const canvas=document.createElement("canvas");
+    canvas.width=w*scale;canvas.height=h*scale;
+    const ctx=canvas.getContext("2d");
+    ctx.fillStyle=bg;ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.drawImage(img,0,0,canvas.width,canvas.height);
+    const a=document.createElement("a");
+    a.download="zbsniff-routing-"+new Date().toISOString().slice(0,19).replace(/[:T]/g,"-")+".png";
+    a.href=canvas.toDataURL("image/png");
+    a.click();
+  };
+  img.onerror=()=>alert("Couldn't render the graph to PNG.");
+  img.src=svgUri;});
 document.getElementById("rg-sx").oninput=e=>{rgSx=+e.target.value;rgDirty=true;};
 document.getElementById("rg-sy").oninput=e=>{rgSy=+e.target.value;rgDirty=true;};
 document.getElementById("rg-isolate").onchange=e=>{rgIsolate=e.target.value;rgSig="";renderGraph();rgReheat(1);};
@@ -1051,8 +1453,7 @@ function renderStatus(){
      `<span>mode <b>${s.mode||"?"}</b></span><span>radio <b>${s.radio??0}</b></span>`+
      `<span>fw <b>${s.fw}</b></span><span>uptime <b>${s.uptime_s??0}s</b></span>`+
      `<span>hop <b>${s.hop_dwell_ms?s.hop_dwell_ms+"ms":"off"}</b></span>`+
-     `<span>captured <b>${s.captured??0}</b></span><span>dropped <b>${s.dropped_buf??0}</b></span>`;
-    if(s.mode_id!=null)document.getElementById("c-mode").value=s.mode_id;
+     `<span>captured (this radio) <b>${s.captured??0}</b></span><span>dropped (this radio) <b>${s.dropped_buf??0}</b></span>`;
     // Reflect the device's ACTUAL hop state in the Config input (unless editing).
     const hd=document.getElementById("c-dwell");
     if(hd&&document.activeElement!==hd)hd.value=s.hop_dwell_ms??0;
@@ -1093,25 +1494,46 @@ async function loadRadios(){const r=await j("/api/radios");if(!r)return;
     osel.innerHTML='<option value="">auto (single radio)</option>'+
       rs.map(x=>`<option value="${x.port}">radio ${x.radio_id} · …${x.port.slice(-6)}</option>`).join("");
     osel.value=cur;}
-  document.getElementById("radios-tbl").innerHTML=rs.map(x=>{
+  // Host-counted, clearable frame tally summed across every radio (see the
+  // header's "captured" stat in render()) — computed here, not gated by the
+  // focus-skip guard below, so it keeps updating even while a Config input
+  // has focus (that guard is only about not clobbering an in-progress edit).
+  radiosFramesSum=rs.reduce((a,x)=>a+(x.frames||0),0);
+  const fsel=document.getElementById("f-radio");
+  if(fsel){const cur=fsel.value;
+    fsel.innerHTML='<option value="">All radios</option>'+
+      rs.map(x=>`<option value="${x.radio_id}">R${x.radio_id}</option>`).join("");
+    fsel.value=cur;}
+  // Skip the destructive re-render while the user has a Radio ID/Channel input
+  // focused in this table — otherwise a mid-typing edit gets silently wiped by
+  // the periodic refresh before they've clicked "set".
+  const radiosTbl=document.getElementById("radios-tbl");
+  if(document.activeElement instanceof HTMLInputElement && radiosTbl.contains(document.activeElement))return;
+  radiosTbl.innerHTML=rs.map(x=>{
     const cur=x.role||"any";
     const roleCell=x.radio_id<0?'<span class=dim>identifying…</span>'
       :`<select class=rrole data-id="${x.radio_id}">`+
         roleOpts.map(o=>`<option value="${o}"${cur===o?" selected":""}>${o}</option>`).join("")+`</select>`;
+    const chCell=x.radio_id<0?(x.channel<0?'—':x.channel)
+      :`<input class=rch type=number min=11 max=26 value="${x.channel<0?'':x.channel}" style="width:40px">`+
+        `<button class=chset data-id="${x.radio_id}" style="font-size:10px;padding:1px 6px;margin-left:4px">set</button>`;
+    // Radio ids are fixed, not user-assignable: 0 = this C6's own local radio
+    // (locked in firmware), 1..3 = a relayed satellite's physical SPI slot.
+    const idCell=x.radio_id<0?'?':x.radio_id;
+    const fwCell=x.radio_id<0?'—':(radioStatus[x.radio_id]?.fw||'<span class=dim>?</span>');
     return `<tr><td class=mono title="${x.port}">…${x.port.slice(-12)}</td>`+
-      `<td><input class=rid type=number min=0 max=3 value="${x.radio_id<0?0:x.radio_id}" style="width:44px">`+
-      `<button class=ridset data-port="${x.port}" style="font-size:10px;padding:1px 6px;margin-left:4px">set</button></td>`+
-      `<td>${roleCell}</td><td>${x.channel<0?'—':x.channel}</td><td>${x.frames}</td><td>${x.probes}</td>`+
+      `<td>${idCell}</td>`+
+      `<td>${roleCell}</td><td>${chCell}</td><td class=mono>${fwCell}</td><td>${x.frames}</td><td>${x.probes}</td>`+
       `<td class=dim>${x.last_seen?ageStr(x.last_seen):''}</td></tr>`;}).join("")
-    ||'<tr><td colspan=7 class=dim>no radios</td></tr>';
+    ||'<tr><td colspan=8 class=dim>no radios</td></tr>';
 }
 document.getElementById("radios-tbl").addEventListener("change",e=>{
   const s=e.target.closest("select.rrole");
   if(s)post(`/api/radio_role?radio=${s.dataset.id}&role=${s.value}`).then(()=>setTimeout(loadRadios,400));});
 document.getElementById("radios-tbl").addEventListener("click",e=>{
-  const b=e.target.closest("button.ridset");if(!b)return;
-  const inp=b.parentElement.querySelector("input.rid");
-  post(`/api/set_radio_id?port=${encodeURIComponent(b.dataset.port)}&id=${inp.value}`).then(()=>setTimeout(loadRadios,700));});
+  const cb=e.target.closest("button.chset");if(!cb)return;
+  const inp=cb.parentElement.querySelector("input.rch");
+  post(`/api/radio_channel?radio=${cb.dataset.id}&ch=${inp.value}`).then(()=>setTimeout(loadRadios,400));});
 on("at-probe",async()=>{const a=document.getElementById("at-addr").value.trim();
   if(!a){alert("Enter a device short address to probe (e.g. 0x1234)");return;}
   const p=document.getElementById("at-radio").value;
@@ -1182,7 +1604,9 @@ on("ota-go",async()=>{const f=document.getElementById("ota-file").files[0];
   if(!f){alert("Choose a firmware .bin file first");return;}
   const target=document.getElementById("ota-target").value;
   const port=document.getElementById("ota-radio").value;
-  if(!confirm(`Flash "${f.name}" (${(f.size/1024).toFixed(0)} KB) to target ${target}?\n\nDo NOT unplug the device during the update.`))return;
+  if(!confirm(`Flash "${f.name}" (${(f.size/1024).toFixed(0)} KB) to target ${target}?\n\n`+
+    `This pauses capture/spectrum/etc on EVERY radio for the duration (they resume automatically once the update finishes).\n\n`+
+    `Do NOT unplug the device during the update.`))return;
   document.getElementById("ota-prog").style.display="block";
   document.getElementById("ota-stat").textContent="uploading…";
   document.getElementById("ota-bar").style.width="0%";
@@ -1193,7 +1617,11 @@ on("ota-go",async()=>{const f=document.getElementById("ota-file").files[0];
   else if(r)document.getElementById("ota-stat").textContent=`sent ${r.size} bytes (crc ${r.crc}) — flashing…`;});
 
 ws();bindGraphZoom();loadActive();loadFrames();initPrefs();
-setInterval(()=>{loadDevices();loadRouting();loadIncidents();loadSpectrum();loadNetworks();loadDiagnostics();loadHAStatus();loadHueStatus();loadConn();loadActive();loadRadios();if(selected)showDetail(selected);},3000);
+j("/api/watch_list").then(r=>{if(r&&r.addrs)watchedAddrs=new Set(r.addrs);});
+setInterval(()=>{loadDevices();loadRouting();loadIncidents();loadSpectrum();loadNetworks();loadAirtime();loadDiagnostics();loadHAStatus();loadHueStatus();loadConn();loadActive();loadRadios();loadDemoStatus();if(selected)showDetail(selected);},3000);
+loadDemoStatus();
+on("no-hw-retry",()=>post("/api/demo/retry").then(loadDemoStatus));
+on("no-hw-demo",()=>{if(confirm("Enter demo mode? This populates the dashboard with a simulated network so you can explore it without hardware.\n\nThis stops searching for real hardware for the rest of this session — restart zbsniff to look again."))post("/api/demo/enable").then(loadDemoStatus);});
 setInterval(loadConn,1000);
 setInterval(render,500);
 loadDevices();loadRouting();loadIncidents();loadSpectrum();loadDiagnostics();loadHAStatus();loadHueStatus();loadConn();

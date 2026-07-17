@@ -7,6 +7,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +19,17 @@ import (
 )
 
 const broadcast = 0xFFFF
+
+// haLogAddrRe pulls a short-address hex like "0x558f" out of an HA/zigpy log
+// message, if one is present — zigpy conventionally prefixes per-device log
+// lines with it (e.g. "[0x558f:1:0x0006] ..."), but plenty of radio/
+// transport-layer entries have no device address at all.
+var haLogAddrRe = regexp.MustCompile(`0x[0-9a-fA-F]{4}`)
+
+// linkSig is the last-observed signal quality on one link, as heard at the
+// sniffer (subject to the same "not the device's real link" caveat as other
+// sniffer-vantage signals — see the "Far from sniffer" diagnostic).
+type linkSig struct{ lqi, rssi int }
 
 const schema = `
 CREATE TABLE IF NOT EXISTS packets(
@@ -35,8 +49,48 @@ CREATE INDEX IF NOT EXISTS idx_packets_ts ON packets(ts);
 CREATE TABLE IF NOT EXISTS incidents(
  id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, addr TEXT, reason TEXT,
  rssi INT, lqi INT, channel INT, ed INT, silent_s INT, raw TEXT);
+CREATE INDEX IF NOT EXISTS idx_incidents_addr ON incidents(addr);
+CREATE INDEX IF NOT EXISTS idx_packets_dst ON packets(dst);
 CREATE TABLE IF NOT EXISTS route_failures(addr INTEGER PRIMARY KEY, count INT, last_reason TEXT, last_seen REAL);
+-- route_failures.count above is a lifetime total across every reason mixed
+-- together (many-to-one, non-tree-link, address-conflict, ...) — it can only
+-- say "the most recent one was X", not "X happened N times". This tracks a
+-- real per-reason lifetime count, e.g. so the Address Conflict diagnostic
+-- isn't overstated by folding in unrelated route-failure reasons.
+CREATE TABLE IF NOT EXISTS route_failure_reasons(
+ addr INT, reason TEXT, count INT, last_seen REAL, PRIMARY KEY(addr,reason));
+-- Timestamped route-failure events (route_failures above only keeps a
+-- lifetime total per device). This is what root-cause clustering in
+-- Diagnostics() uses to tell one device's real problem apart from a shared
+-- cause (a bad router, interference, a mesh-wide hiccup) hitting many
+-- devices at once. reporter is the NWK source of the Network-Status frame —
+-- i.e. who is reporting the failure, not who it's about.
+CREATE TABLE IF NOT EXISTS route_failure_log(
+ id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, target INT, reporter INT, reason TEXT);
+CREATE INDEX IF NOT EXISTS idx_rfl_ts ON route_failure_log(ts);
+CREATE INDEX IF NOT EXISTS idx_rfl_target ON route_failure_log(target);
+-- Home Assistant's own system log (Settings > Logs), pulled over the existing
+-- HA websocket link and filtered to ZHA/zigpy-sourced entries. This is the
+-- layer a passive Zigbee sniffer can't see: a command that never made it
+-- onto the air, a timeout, an exception inside the integration itself — all
+-- invisible on the RF side. key mirrors HA's own dedup (logger+first
+-- occurrence) so a repeated log line updates in place instead of piling up.
+CREATE TABLE IF NOT EXISTS ha_log(
+ key TEXT PRIMARY KEY, ts REAL, first_seen REAL, level TEXT, logger TEXT,
+ message TEXT, exception TEXT, count INT);
+CREATE INDEX IF NOT EXISTS idx_ha_log_ts ON ha_log(ts);
 CREATE TABLE IF NOT EXISTS pans(pan INTEGER PRIMARY KEY, count INT, last_seen REAL, channel INT, label TEXT);
+-- Per-minute airtime rollup: frames + RSSI histogram per (PAN, channel).
+-- Aggregated at ingest so the airtime view never scans the packets table
+-- (see the edCap note above for why a heavy query here freezes the app).
+-- pan = -1 collects frames with no PAN field at all (MAC ACKs etc.).
+-- h0..h7 are RSSI bins: <=-101, then 10 dB steps up to >=-40.
+CREATE TABLE IF NOT EXISTS pan_minutes(
+ bucket INT, pan INT, channel INT, frames INT, rssi_sum INT,
+ h0 INT DEFAULT 0, h1 INT DEFAULT 0, h2 INT DEFAULT 0, h3 INT DEFAULT 0,
+ h4 INT DEFAULT 0, h5 INT DEFAULT 0, h6 INT DEFAULT 0, h7 INT DEFAULT 0,
+ PRIMARY KEY(bucket,pan,channel));
+CREATE INDEX IF NOT EXISTS idx_pan_minutes_bucket ON pan_minutes(bucket);
 CREATE TABLE IF NOT EXISTS probe_results(
  id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, target INT, port TEXT, radio INT,
  acked INT, rssi INT, lqi INT);
@@ -59,6 +113,8 @@ type DB struct {
 	db       *sql.DB
 	edWrites  int // counter for periodic ed_samples pruning
 	pktWrites int // counter for periodic packets pruning
+	rflWrites int // counter for periodic route_failure_log pruning
+	pmWrites  int // counter for periodic pan_minutes pruning
 }
 
 // Open opens (or creates) the database at path (":memory:" for in-memory).
@@ -81,10 +137,34 @@ func Open(path string) (*DB, error) {
 	d.Exec(`ALTER TABLE pans ADD COLUMN label TEXT`)
 	d.Exec(`ALTER TABLE devices ADD COLUMN pan INTEGER`) // which network the device is on
 	d.Exec(`ALTER TABLE packets ADD COLUMN raw TEXT`)    // raw MPDU hex, for the frame inspector
+	// 'mac' (immediate physical radio hop) or 'nwk' (logical end-to-end device
+	// pair — same across every hop of a multi-hop route, so it does NOT reveal
+	// intermediate routers). NULL for pre-migration rows. See upsertLink().
+	d.Exec(`ALTER TABLE links ADD COLUMN layer TEXT`)
 	// One-time trim: an existing DB may already hold millions of ed_samples from
 	// before the cap existed. Bring it back under edCap so queries are fast now.
 	d.Exec(`DELETE FROM ed_samples WHERE rowid <= (SELECT MAX(rowid) - ? FROM ed_samples)`, edCap)
 	return &DB{db: d}, nil
+}
+
+// Reset purges every captured-data table back to empty (packets, devices,
+// links, ED samples, incidents, route failures, PANs, probe history,
+// schedules) — used by the dashboard's "purge data"/"factory reset" controls.
+// Settings (zbsniff.yaml) are untouched; see main.go's factory-reset handler
+// for the variant that also resets those. VACUUM reclaims the freed disk
+// space, which SQLite doesn't do automatically after a DELETE.
+func (d *DB) Reset() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	tables := []string{"packets", "devices", "links", "ed_samples", "incidents",
+		"route_failures", "route_failure_log", "route_failure_reasons", "ha_log", "pans", "probe_results", "schedules"}
+	for _, t := range tables {
+		if _, err := d.db.Exec("DELETE FROM " + t); err != nil {
+			return fmt.Errorf("purge %s: %w", t, err)
+		}
+	}
+	d.db.Exec("VACUUM")
+	return nil
 }
 
 func hexAddr(a sql.NullInt64) string {
@@ -138,32 +218,55 @@ func (d *DB) IngestFrame(ts float64, radio, channel int, rssi, lqi int, dec *dec
 	if seenPan >= 0 && seenPan != 0xFFFF {
 		panInt = int(seenPan)
 	}
+
+	// Per-minute airtime rollup (frames + RSSI histogram per PAN/channel).
+	// panInt -1 keeps ACKs and other PAN-less frames counted as airtime.
+	bucket := int(ts) / 60
+	bin := (rssi + 110) / 10
+	if bin < 0 {
+		bin = 0
+	} else if bin > 7 {
+		bin = 7
+	}
+	col := histCols[bin]
+	d.db.Exec(`INSERT INTO pan_minutes(bucket,pan,channel,frames,rssi_sum,`+col+`)
+	           VALUES(?,?,?,1,?,1)
+	           ON CONFLICT(bucket,pan,channel) DO UPDATE SET
+	           frames=frames+1,rssi_sum=rssi_sum+?,`+col+`=`+col+`+1`,
+		bucket, panInt, channel, rssi, rssi)
+	if d.pmWrites++; d.pmWrites%4096 == 0 {
+		d.db.Exec(`DELETE FROM pan_minutes WHERE bucket < ?`, bucket-2880) // keep 48h
+	}
 	// MAC-layer addresses are the physical hop (often router<->coordinator).
 	if src >= 0 && src != broadcast {
 		d.upsertDevice(int(src), ts, rssi, lqi, channel, panInt)
 	}
 	if src >= 0 && dst >= 0 && dst != broadcast {
-		d.upsertLink(int(src), int(dst), lqi, rssi, ts)
+		d.upsertLink(int(src), int(dst), lqi, rssi, ts, "mac")
 	}
 
 	// NWK-layer addresses are the actual source/destination DEVICES (the NWK
 	// header is unencrypted, so this works even without the network key). This is
-	// what reveals child devices that only ever talk through a router.
+	// what reveals child devices that only ever talk through a router. Tagged
+	// "nwk" (not "mac") because this pair is the same across every hop of a
+	// multi-hop route — it does NOT reveal the intermediate router(s) the way
+	// the MAC-layer hop above does, and the routing tree must not treat it as
+	// one (see Routing()/latestEdgePerSrc in the api package).
 	if dec.NWK != nil {
 		ns, nd := dec.NWK.Src, dec.NWK.Dst
 		if ns >= 0 && ns < 0xFFF8 {
 			d.upsertDevice(ns, ts, rssi, lqi, channel, panInt)
 		}
 		if ns >= 0 && ns < 0xFFF8 && nd >= 0 && nd < 0xFFF8 && ns != nd {
-			d.upsertLink(ns, nd, lqi, rssi, ts)
+			d.upsertLink(ns, nd, lqi, rssi, ts, "nwk")
 		}
 	}
 }
 
-func (d *DB) upsertLink(src, dst, lqi, rssi int, ts float64) {
-	d.db.Exec(`INSERT INTO links(src,dst,count,last_lqi,last_rssi,last_seen) VALUES(?,?,1,?,?,?)
-	           ON CONFLICT(src,dst) DO UPDATE SET count=count+1,last_lqi=?,last_rssi=?,last_seen=?`,
-		src, dst, lqi, rssi, ts, lqi, rssi, ts)
+func (d *DB) upsertLink(src, dst, lqi, rssi int, ts float64, layer string) {
+	d.db.Exec(`INSERT INTO links(src,dst,count,last_lqi,last_rssi,last_seen,layer) VALUES(?,?,1,?,?,?,?)
+	           ON CONFLICT(src,dst) DO UPDATE SET count=count+1,last_lqi=?,last_rssi=?,last_seen=?,layer=?`,
+		src, dst, lqi, rssi, ts, layer, lqi, rssi, ts, layer)
 }
 
 func (d *DB) upsertDevice(addr int, ts float64, rssi, lqi, channel, pan int) {
@@ -393,17 +496,20 @@ func (d *DB) Routing() map[string]any {
 	devices := d.Devices()
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	rows, _ := d.db.Query(`SELECT src,dst,count,last_lqi,last_rssi FROM links ORDER BY count DESC`)
+	rows, _ := d.db.Query(`SELECT src,dst,count,last_lqi,last_rssi,last_seen,layer FROM links ORDER BY count DESC`)
 	var edges []map[string]any
 	if rows != nil {
 		defer rows.Close()
 		for rows.Next() {
 			var src, dst sql.NullInt64
 			var count, lqi, rssi sql.NullInt64
-			rows.Scan(&src, &dst, &count, &lqi, &rssi)
+			var lastSeen sql.NullFloat64
+			var layer sql.NullString
+			rows.Scan(&src, &dst, &count, &lqi, &rssi, &lastSeen, &layer)
 			edges = append(edges, map[string]any{
 				"src": hexAddr(src), "dst": hexAddr(dst),
 				"lqi": lqi.Int64, "rssi": rssi.Int64, "count": count.Int64,
+				"last_seen": lastSeen.Float64, "layer": layer.String,
 			})
 		}
 	}
@@ -433,13 +539,580 @@ func (d *DB) Incidents(limit int) []map[string]any {
 	return out
 }
 
-// IngestRouteFailure records an NWK route/link failure targeting a device.
-func (d *DB) IngestRouteFailure(addr int, reason string, ts float64) {
+// rflCap bounds route_failure_log the same way edCap bounds ed_samples — keep
+// only the most recent rflCap events so the time-clustering query in
+// routeFailureClusterFindings stays fast over weeks of capture.
+const rflCap = 20000
+
+// IngestRouteFailure records an NWK route/link failure targeting a device:
+// both a lifetime per-device total (route_failures — unchanged, immediately
+// useful even with no history) and a timestamped event (route_failure_log —
+// what root-cause clustering uses to tell one device's real problem apart
+// from a shared cause hitting many devices at once). reporter is the NWK
+// source of the Network-Status frame, i.e. who is reporting the failure.
+func (d *DB) IngestRouteFailure(target, reporter int, reason string, ts float64) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.db.Exec(`INSERT INTO route_failures(addr,count,last_reason,last_seen) VALUES(?,1,?,?)
 	           ON CONFLICT(addr) DO UPDATE SET count=count+1,last_reason=?,last_seen=?`,
-		addr, reason, ts, reason, ts)
+		target, reason, ts, reason, ts)
+	d.db.Exec(`INSERT INTO route_failure_reasons(addr,reason,count,last_seen) VALUES(?,?,1,?)
+	           ON CONFLICT(addr,reason) DO UPDATE SET count=count+1,last_seen=?`,
+		target, reason, ts, ts)
+	d.db.Exec(`INSERT INTO route_failure_log(ts,target,reporter,reason) VALUES(?,?,?,?)`,
+		ts, target, reporter, reason)
+	if d.rflWrites++; d.rflWrites%512 == 0 {
+		d.db.Exec(`DELETE FROM route_failure_log WHERE rowid <= (SELECT MAX(rowid) - ? FROM route_failure_log)`, rflCap)
+	}
+}
+
+// routeFailureClusterGapS bounds how close in time two route-failure events
+// must be to count as the same underlying incident rather than an unrelated
+// coincidence — single-linkage time clustering: walk events in time order and
+// start a new cluster whenever the gap since the last one exceeds this.
+const routeFailureClusterGapS = 300 // 5 minutes
+
+type rfEvent struct {
+	ts               float64
+	target, reporter int
+	reason           string
+}
+
+// routeFailureClusterFindings turns the raw route_failure_log into a handful
+// of root-cause findings instead of one alert per device. It clusters events
+// by time proximity into incidents, then classifies each incident by what the
+// events in it have in common:
+//   - one reporting router, many different targets → the router itself (its
+//     uplink, load, or firmware) is the likely shared cause, not N broken
+//     devices
+//   - one target, regardless of reporter → that device genuinely is hard to
+//     reach
+//   - neither → a mesh-wide event (congestion, interference, a coordinator
+//     hiccup), correlated against the channel's current energy for an
+//     interference hypothesis
+//
+// Address-conflict events are excluded — they're handled separately in
+// Diagnostics() from the lifetime totals, since that signal doesn't need
+// time-clustering and (unlike this) has no cold-start problem after an
+// upgrade. Caller must already hold d.mu (this issues its own queries against
+// the shared *sql.DB, same pattern as the rest of Diagnostics()).
+func routeFailureClusterFindings(db *sql.DB, edByCh map[int]int) []map[string]any {
+	rows, err := db.Query(`SELECT ts,target,reporter,reason FROM route_failure_log
+	                       WHERE reason != 'Address conflict' ORDER BY ts ASC`)
+	if err != nil {
+		return nil
+	}
+	var events []rfEvent
+	for rows.Next() {
+		var e rfEvent
+		var reporter sql.NullInt64
+		rows.Scan(&e.ts, &e.target, &reporter, &e.reason)
+		e.reporter = int(reporter.Int64)
+		events = append(events, e)
+	}
+	rows.Close()
+	if len(events) == 0 {
+		return nil
+	}
+
+	var clusters [][]rfEvent
+	cur := []rfEvent{events[0]}
+	for _, e := range events[1:] {
+		if e.ts-cur[len(cur)-1].ts > routeFailureClusterGapS {
+			clusters = append(clusters, cur)
+			cur = nil
+		}
+		cur = append(cur, e)
+	}
+	clusters = append(clusters, cur)
+
+	noisiestCh := -200
+	for _, ed := range edByCh {
+		if ed > noisiestCh {
+			noisiestCh = ed
+		}
+	}
+
+	var out []map[string]any
+	add := func(sev, cat, msg string, addr int) {
+		m := map[string]any{"severity": sev, "category": cat, "message": msg}
+		if addr >= 0 {
+			m["addr"] = fmt.Sprintf("0x%04x", uint16(addr))
+		}
+		out = append(out, m)
+	}
+
+	// Biggest incidents first; a long tail of 2-event blips isn't worth
+	// showing, and there's a cap so a bad week doesn't flood the panel.
+	sort.Slice(clusters, func(i, j int) bool { return len(clusters[i]) > len(clusters[j]) })
+	shown := 0
+	for _, cl := range clusters {
+		if len(cl) < 2 {
+			continue
+		}
+		if shown >= 10 {
+			break
+		}
+		targets, reporters, reasons := map[int]int{}, map[int]int{}, map[string]int{}
+		for _, e := range cl {
+			targets[e.target]++
+			if e.reporter != 0 {
+				reporters[e.reporter]++
+			}
+			reasons[e.reason]++
+		}
+		dur := cl[len(cl)-1].ts - cl[0].ts
+		reason := modeKey(reasons)
+		sev := "notice"
+		switch {
+		case len(cl) >= 20:
+			sev = "critical"
+		case len(cl) >= 8:
+			sev = "error"
+		case len(cl) >= 3:
+			sev = "warning"
+		}
+		switch {
+		case len(reporters) == 1 && len(targets) >= 3:
+			rep := onlyIntKey(reporters)
+			add(sev, "Router health", fmt.Sprintf(
+				"router 0x%04x reported %d route failures (\"%s\") for %d different devices over %s — the shared cause is likely this router itself (its uplink, load, or firmware), not %d unrelated device faults",
+				uint16(rep), len(cl), reason, len(targets), humanDur(dur), len(targets)), rep)
+		case len(targets) == 1:
+			tgt := onlyIntKey(targets)
+			add(sev, "Route failure", fmt.Sprintf(
+				"%d route failures (\"%s\") over %s — this device specifically is hard to reach; re-pair it or add a router nearer to it",
+				len(cl), reason, humanDur(dur)), tgt)
+		default:
+			note := ""
+			if noisiestCh > -75 {
+				note = fmt.Sprintf(" — channel energy is currently elevated (%ddBm), consistent with RF interference as a shared cause", noisiestCh)
+			}
+			add(sev, "Mesh event", fmt.Sprintf(
+				"%d route failures across %d devices and %d routers within %s — looks like a shared event (congestion, interference, or a coordinator hiccup), not %d independent device faults%s",
+				len(cl), len(targets), len(reporters), humanDur(dur), len(targets), note), -1)
+		}
+		shown++
+	}
+	return out
+}
+
+func modeKey(m map[string]int) string {
+	best, bestN := "", -1
+	for k, n := range m {
+		if n > bestN {
+			best, bestN = k, n
+		}
+	}
+	return best
+}
+func onlyIntKey(m map[int]int) int {
+	best, bestN := 0, -1
+	for k, n := range m {
+		if n > bestN {
+			best, bestN = k, n
+		}
+	}
+	return best
+}
+func humanDur(s float64) string {
+	switch {
+	case s < 60:
+		return fmt.Sprintf("%ds", int(s))
+	case s < 3600:
+		return fmt.Sprintf("%dm", int(s/60))
+	default:
+		return fmt.Sprintf("%.1fh", s/3600)
+	}
+}
+
+// IngestHALog upserts one ZHA/zigpy-sourced Home Assistant system-log entry
+// (already filtered by the caller — see names.HAClient.Fetch). key mirrors
+// HA's own dedup (logger name + first occurrence) so a repeated log line
+// updates count/timestamp in place instead of accumulating duplicate rows.
+func (d *DB) IngestHALog(key string, ts, firstSeen float64, level, logger, message, exception string, count int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.db.Exec(`INSERT INTO ha_log(key,ts,first_seen,level,logger,message,exception,count) VALUES(?,?,?,?,?,?,?,?)
+	           ON CONFLICT(key) DO UPDATE SET ts=excluded.ts,count=excluded.count,message=excluded.message`,
+		key, ts, firstSeen, level, logger, message, exception, count)
+}
+
+// HALogsFor returns HA system-log entries whose message mentions any of
+// needles (typically a device's short-address hex like "0x558f", its IEEE,
+// and/or its friendly name — zigpy log lines conventionally prefix with the
+// short address, e.g. "[0x558f:1:0x0006] ..."). This is the layer a passive
+// sniffer can't see: a command that never made it onto the air, a timeout,
+// an exception inside the integration — so it's checked alongside RF-derived
+// findings in DeviceAnalysis, not as a replacement for them.
+func (d *DB) HALogsFor(needles []string, limit int) []map[string]any {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var conds []string
+	var args []any
+	for _, n := range needles {
+		if n == "" {
+			continue
+		}
+		conds = append(conds, "message LIKE ?")
+		args = append(args, "%"+n+"%")
+	}
+	if len(conds) == 0 {
+		return nil
+	}
+	q := fmt.Sprintf(`SELECT ts,level,logger,message,exception,count FROM ha_log WHERE (%s) ORDER BY ts DESC LIMIT ?`,
+		strings.Join(conds, " OR "))
+	args = append(args, limit)
+	rows, err := d.db.Query(q, args...)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []map[string]any
+	for rows.Next() {
+		var ts float64
+		var level, logger, message, exception string
+		var count int
+		rows.Scan(&ts, &level, &logger, &message, &exception, &count)
+		out = append(out, map[string]any{
+			"ts": ts, "level": level, "logger": logger, "message": message,
+			"exception": exception, "count": count,
+		})
+	}
+	return out
+}
+
+// DeviceAnalysis aggregates every record the store holds about one device —
+// its full silence/recovery incident history, route failures, active-probe
+// results, and RSSI/LQI trend at the sniffer — plus a set of rule-based
+// findings that try to explain *why* it is going unresponsive. It's the
+// single-device counterpart to Diagnostics(), which scans the whole mesh.
+func (d *DB) DeviceAnalysis(addr int) map[string]any {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	addrHex := fmt.Sprintf("0x%04x", uint16(addr))
+
+	dev := map[string]any{}
+	{
+		var firstSeen, lastSeen sql.NullFloat64
+		var count, rssi, lqi, ch sql.NullInt64
+		var role, name sql.NullString
+		row := d.db.QueryRow(`SELECT first_seen,last_seen,count,last_rssi,last_lqi,last_channel,role,name
+		                      FROM devices WHERE addr=?`, addr)
+		if err := row.Scan(&firstSeen, &lastSeen, &count, &rssi, &lqi, &ch, &role, &name); err == nil {
+			dev = map[string]any{
+				"first_seen": firstSeen.Float64, "last_seen": lastSeen.Float64, "count": count.Int64,
+				"last_rssi": rssi.Int64, "last_lqi": lqi.Int64, "last_channel": ch.Int64,
+				"role": role.String, "name": name.String,
+			}
+		}
+	}
+
+	// Full incident history for this device (not just the latest N, like
+	// Incidents() returns for the mesh-wide feed) — oldest first, so trend
+	// analysis below can walk it in order.
+	var incidents []map[string]any
+	if rows, err := d.db.Query(`SELECT ts,reason,rssi,lqi,channel,ed,silent_s
+	                            FROM incidents WHERE addr=? ORDER BY ts ASC`, addrHex); err == nil {
+		for rows.Next() {
+			var ts sql.NullFloat64
+			var reason sql.NullString
+			var rssi, lqi, ch, ed, silent sql.NullInt64
+			rows.Scan(&ts, &reason, &rssi, &lqi, &ch, &ed, &silent)
+			incidents = append(incidents, map[string]any{
+				"ts": ts.Float64, "reason": reason.String, "rssi": rssi.Int64, "lqi": lqi.Int64,
+				"channel": ch.Int64, "ed": ed.Int64, "silent_s": silent.Int64,
+			})
+		}
+		rows.Close()
+	}
+
+	var rf map[string]any
+	{
+		var count sql.NullInt64
+		var reason sql.NullString
+		var lastSeen sql.NullFloat64
+		if err := d.db.QueryRow(`SELECT count,last_reason,last_seen FROM route_failures WHERE addr=?`, addr).
+			Scan(&count, &reason, &lastSeen); err == nil {
+			rf = map[string]any{"count": count.Int64, "last_reason": reason.String, "last_seen": lastSeen.Float64}
+		}
+	}
+
+	// RSSI/LQI trend at the sniffer, oldest-first, capped so a chatty device
+	// doesn't blow up the response or the query.
+	var trend []map[string]any
+	if rows, err := d.db.Query(`SELECT ts,rssi,lqi FROM packets WHERE src=? OR dst=?
+	                            ORDER BY id DESC LIMIT 300`, addr, addr); err == nil {
+		for rows.Next() {
+			var ts sql.NullFloat64
+			var rssi, lqi sql.NullInt64
+			rows.Scan(&ts, &rssi, &lqi)
+			trend = append(trend, map[string]any{"ts": ts.Float64, "rssi": rssi.Int64, "lqi": lqi.Int64})
+		}
+		rows.Close()
+		for i, j := 0, len(trend)-1; i < j; i, j = i+1, j-1 { // → oldest-first
+			trend[i], trend[j] = trend[j], trend[i]
+		}
+	}
+
+	var probeTotal, probeAcks sql.NullInt64
+	d.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(acked),0) FROM probe_results WHERE target=?`, addr).
+		Scan(&probeTotal, &probeAcks)
+
+	// Probe timestamps, for correlating against rejoin incidents below — did
+	// an active probe precede a recovery, suggesting probing this device
+	// nudges it back online rather than it recovering on its own?
+	var probeTimes []float64
+	if rows, err := d.db.Query(`SELECT ts FROM probe_results WHERE target=? ORDER BY ts ASC`, addr); err == nil {
+		for rows.Next() {
+			var ts float64
+			rows.Scan(&ts)
+			probeTimes = append(probeTimes, ts)
+		}
+		rows.Close()
+	}
+
+	// Every distinct link partner we've ever observed for this device — used
+	// to spot a structural single-point-of-failure: a device whose only known
+	// path is one direct hop to the coordinator, with no nearby router to
+	// fall back on. That alone explains "sometimes just stops responding
+	// (NWK_NO_ROUTE), but the RF trace looks otherwise fine": when the one
+	// link degrades even briefly, there's nowhere else for a message to go.
+	neighbors := map[int]linkSig{}
+	if rows, err := d.db.Query(`SELECT src,dst,last_lqi,last_rssi FROM links WHERE src=? OR dst=?`, addr, addr); err == nil {
+		for rows.Next() {
+			var src, dst, lqi, rssi int
+			rows.Scan(&src, &dst, &lqi, &rssi)
+			other := dst
+			if src != addr {
+				other = src
+			}
+			neighbors[other] = linkSig{lqi, rssi}
+		}
+		rows.Close()
+	}
+
+	return map[string]any{
+		"addr": addrHex, "device": dev, "incidents": incidents, "route_failures": rf,
+		"rssi_trend": trend, "probes": map[string]any{"total": probeTotal.Int64, "acks": probeAcks.Int64},
+		"findings": deviceAnalysisFindings(incidents, rf, trend, probeTotal.Int64, probeAcks.Int64, probeTimes, neighbors),
+	}
+}
+
+// deviceAnalysisFindings turns one device's records into plain-English
+// hypotheses for why it might be going unresponsive. Same {severity,
+// category, message} shape and severity scale as Diagnostics().
+func deviceAnalysisFindings(incidents []map[string]any, rf map[string]any, trend []map[string]any,
+	probeTotal, probeAcks int64, probeTimes []float64, neighbors map[int]linkSig) []map[string]any {
+	var out []map[string]any
+	add := func(sev, cat, msg string) { out = append(out, map[string]any{"severity": sev, "category": cat, "message": msg}) }
+
+	// Topology risk: if the only link we've ever observed for this device is
+	// a direct hop straight to the coordinator, it has no fallback path — a
+	// structural single point of failure, independent of current signal
+	// quality. When that one link degrades even briefly (interference, a busy
+	// moment on the coordinator's radio), there's nowhere else to route,
+	// which fits a device that intermittently refuses commands (e.g.
+	// NWK_NO_ROUTE) or looks unresponsive despite an otherwise clean RF trace.
+	if len(neighbors) == 1 {
+		if sig, ok := neighbors[0]; ok {
+			add("warning", "Topology risk", fmt.Sprintf(
+				"the only path ever observed for this device is a direct link to the coordinator (LQI %d, %d dBm as heard at the sniffer) — no nearby router to fall back on if that link degrades. A mains-powered router/repeater placed between the coordinator and this device would give it a real alternate path",
+				sig.lqi, sig.rssi))
+		}
+	}
+
+	// Rejoins: a real Association/Orphan/Coordinator-Realignment/Device-
+	// announce — much stronger evidence than inferred silence/recovery that
+	// this device actually lost and re-established its network connection.
+	// The key question: does probing it correlate with recovery? If an
+	// active probe reliably precedes a rejoin, that's a strong, actionable
+	// clue (the device is orphaning, not failing outright — a nudge brings
+	// it back) rather than a mystery.
+	const probeCorrelationWindowS = 180
+	var rejoins []map[string]any
+	for _, inc := range incidents {
+		if inc["reason"] == "rejoin" {
+			rejoins = append(rejoins, inc)
+		}
+	}
+	if n := len(rejoins); n > 0 {
+		precededByProbe := 0
+		for _, rj := range rejoins {
+			rts := rj["ts"].(float64)
+			for _, pts := range probeTimes {
+				if pts <= rts && rts-pts <= probeCorrelationWindowS {
+					precededByProbe++
+					break
+				}
+			}
+		}
+		sev := "notice"
+		if n >= 3 {
+			sev = "warning"
+		}
+		add(sev, "Rejoin", fmt.Sprintf(
+			"%d rejoin event(s) logged (Association/Orphan/re-announce — not just a routine poll) — this device has actually lost and re-established its network connection, not just gone quiet", n))
+		if precededByProbe > 0 {
+			pct := 100 * precededByProbe / n
+			corSev := "notice"
+			if pct >= 50 {
+				corSev = "warning"
+			}
+			add(corSev, "Probe correlation", fmt.Sprintf(
+				"%d of %d rejoins (%d%%) happened within %ds of an active probe — probing this device appears to nudge it back online, which points at it orphaning (losing its parent silently) rather than a hardware fault; a scheduled probe (Active testing → Schedules) is a reasonable workaround while you chase the root cause",
+				precededByProbe, n, pct, probeCorrelationWindowS))
+		}
+	}
+
+	// Route failures: the strongest, most direct dropout signal — the mesh
+	// itself reported it could not reach this device (vs. just being far from
+	// the sniffer, which the "Far from sniffer" diagnostic already covers).
+	if rf != nil {
+		c := rf["count"].(int64)
+		reason, _ := rf["last_reason"].(string)
+		sev := "notice"
+		switch {
+		case c >= 10:
+			sev = "critical"
+		case c >= 3:
+			sev = "error"
+		case c >= 1:
+			sev = "warning"
+		}
+		add(sev, "Route failures", fmt.Sprintf(
+			"%d route failure(s) reported for this device, most recently \"%s\" — the mesh itself lost the path to it",
+			c, reason))
+	}
+
+	var silences []map[string]any
+	for _, inc := range incidents {
+		if inc["reason"] == "silence" {
+			silences = append(silences, inc)
+		}
+	}
+	if n := len(silences); n > 0 {
+		var totalSilent, maxSilent int64
+		noisyHits, noisySamples := 0, 0
+		for _, s := range silences {
+			ss := s["silent_s"].(int64)
+			totalSilent += ss
+			if ss > maxSilent {
+				maxSilent = ss
+			}
+			if ed := s["ed"].(int64); ed != 0 {
+				noisySamples++
+				if ed > -75 {
+					noisyHits++
+				}
+			}
+		}
+		avg := totalSilent / int64(n)
+		sev := "notice"
+		if n >= 5 {
+			sev = "warning"
+		}
+		pattern := "a repeating pattern, not a one-off"
+		if n == 1 {
+			pattern = "only one so far — keep watching before drawing conclusions"
+		}
+		add(sev, "Dropout pattern", fmt.Sprintf(
+			"%d silence incident(s) logged, averaging %ds silent (longest %ds) — %s", n, avg, maxSilent, pattern))
+
+		// Trend: are dropouts getting longer or shorter over time? Compare the
+		// average of the first half of the history to the second half.
+		if n >= 4 {
+			half := n / 2
+			var firstSum, secondSum int64
+			for _, s := range silences[:half] {
+				firstSum += s["silent_s"].(int64)
+			}
+			for _, s := range silences[half:] {
+				secondSum += s["silent_s"].(int64)
+			}
+			firstAvg, secondAvg := firstSum/int64(half), secondSum/int64(n-half)
+			switch {
+			case secondAvg > firstAvg+10 && float64(secondAvg) > float64(firstAvg)*1.3:
+				add("warning", "Trend", fmt.Sprintf(
+					"dropouts are getting longer over time (%ds avg early on → %ds avg recently) — worth acting before it goes fully offline",
+					firstAvg, secondAvg))
+			case firstAvg > 10 && float64(secondAvg) < float64(firstAvg)*0.7:
+				add("info", "Trend", fmt.Sprintf(
+					"dropouts are getting shorter over time (%ds avg early on → %ds avg recently) — may be self-resolving",
+					firstAvg, secondAvg))
+			}
+		}
+
+		// Channel-noise correlation, from the energy reading captured at each
+		// silence incident's detection time.
+		if noisySamples >= 2 {
+			pct := 100 * noisyHits / noisySamples
+			if pct >= 60 {
+				add("warning", "Interference", fmt.Sprintf(
+					"%d%% of silence incidents (%d/%d) coincided with a busy channel (energy > -75dBm) — RF interference is a plausible cause, not just range",
+					pct, noisyHits, noisySamples))
+			}
+		}
+
+		// Time-of-day clustering — a classic tell for periodic interference
+		// (a microwave, a WiFi channel scan, a thermostat cycling nearby)
+		// rather than a slow general decline.
+		if n >= 4 {
+			buckets := map[int]int{}
+			for _, s := range silences {
+				buckets[time.Unix(int64(s["ts"].(float64)), 0).Hour()/2]++ // 2h buckets
+			}
+			bestBucket, bestCount := -1, 0
+			for b, c := range buckets {
+				if c > bestCount {
+					bestBucket, bestCount = b, c
+				}
+			}
+			if bestCount*2 >= n {
+				add("notice", "Timing", fmt.Sprintf(
+					"%d of %d silence incidents happened between %02d:00–%02d:00 — check what runs on a schedule near this device around then",
+					bestCount, n, bestBucket*2, bestBucket*2+2))
+			}
+		}
+	}
+
+	// RSSI trend at the sniffer (its vantage point only — not the device's
+	// real mesh link, same caveat as Diagnostics' "Far from sniffer").
+	if n := len(trend); n >= 10 {
+		third := n / 3
+		var early, late, earlyN, lateN int64
+		for _, t := range trend[:third] {
+			early += t["rssi"].(int64)
+			earlyN++
+		}
+		for _, t := range trend[n-third:] {
+			late += t["rssi"].(int64)
+			lateN++
+		}
+		if earlyN > 0 && lateN > 0 {
+			earlyAvg, lateAvg := early/earlyN, late/lateN
+			if earlyAvg-lateAvg >= 8 {
+				add("info", "Signal trend", fmt.Sprintf(
+					"RSSI at the sniffer has dropped %ddBm over the observed window (%d → %d dBm) — the device may have moved, lost line-of-sight, or something new is blocking the path",
+					earlyAvg-lateAvg, earlyAvg, lateAvg))
+			}
+		}
+	}
+
+	if probeTotal > 0 {
+		if probeAcks == 0 {
+			add("warning", "Active test", fmt.Sprintf(
+				"%d active probe(s) sent, 0 acknowledged — the radio isn't answering right now even when directly pinged", probeTotal))
+		} else if probeAcks < probeTotal {
+			add("info", "Active test", fmt.Sprintf(
+				"%d/%d active probes acknowledged — intermittent, consistent with a marginal link rather than a dead radio", probeAcks, probeTotal))
+		}
+	}
+
+	if len(out) == 0 {
+		add("info", "No pattern yet", "not enough history to draw a conclusion — keep the sniffer running, and consider Watch + an active Probe next time it looks unresponsive")
+	}
+	return out
 }
 
 // Diagnostics analyses the captured data and returns a list of health issues,
@@ -467,18 +1140,34 @@ func (d *DB) Diagnostics(ourPan int) []map[string]any {
 			fn(rows)
 		}
 	}
-	// Route failures (the strongest dropout signal) — a real error.
-	q(`SELECT addr,count,last_reason FROM route_failures WHERE count>=2 ORDER BY count DESC LIMIT 30`,
+	// Address conflicts are a distinct, serious signal — a NWK short address
+	// was assigned to more than one device, a coordinator-level fault that on
+	// its own can produce a device randomly vanishing/reappearing. Reported
+	// from a real per-reason lifetime total (route_failure_reasons — NOT
+	// route_failures.count, which mixes every route-failure reason together
+	// and would overstate this), available immediately with no cold-start
+	// problem, rather than clustered below, since concentration-by-time isn't
+	// the relevant pattern here.
+	q(`SELECT addr,count,last_seen FROM route_failure_reasons WHERE reason='Address conflict' AND count>=1 ORDER BY count DESC LIMIT 15`,
 		func(r *sql.Rows) {
 			var addr, c int
-			var reason string
-			r.Scan(&addr, &c, &reason)
-			sev := "error"
-			if c >= 10 {
-				sev = "critical"
-			}
-			add(sev, "Route failure", fmt.Sprintf("%d× \"%s\" — device hard to reach (re-pair or add a router nearby)", c, reason), addr)
+			var lastSeen float64
+			r.Scan(&addr, &c, &lastSeen)
+			ago := humanDur(float64(time.Now().Unix()) - lastSeen)
+			add("critical", "Address conflict", fmt.Sprintf(
+				"%d× NWK short-address conflict, most recently %s ago — the coordinator assigned this address to more than one device at some point, which alone can cause a device to randomly vanish/reappear; re-pair it, or if this shows up on several devices, restart the coordinator's address table",
+				c, ago), addr)
 		})
+	// Every other route failure: root-cause clustering instead of one alert
+	// per device — see routeFailureClusterFindings.
+	edByCh := map[int]int{}
+	q(`SELECT channel, ed_dbm FROM ed_samples WHERE rowid IN (SELECT MAX(rowid) FROM ed_samples GROUP BY channel)`,
+		func(r *sql.Rows) {
+			var ch, ed int
+			r.Scan(&ch, &ed)
+			edByCh[ch] = ed
+		})
+	out = append(out, routeFailureClusterFindings(d.db, edByCh)...)
 	// Foreign Zigbee networks — other PAN ids seen (notice). If our PAN is
 	// unknown (no ZHA backup), assume the busiest PAN is ours and flag the rest.
 	panRow := 0
@@ -518,21 +1207,84 @@ func (d *DB) Diagnostics(ourPan int) []map[string]any {
 	now := float64(time.Now().Unix())
 	// Silent devices — a device that was chatty then went quiet is the classic
 	// dropout signature. Conservative thresholds so sleepy sensors don't spam.
+	// Devices whose silences START close together in time (same last_seen
+	// neighborhood) share a cause — a capture dropout, interference, or a
+	// coordinator hiccup — and get rolled into one finding instead of one row
+	// each; same root-cause-over-per-device-alerts reasoning as route
+	// failures above.
+	type silentDev struct {
+		addr int
+		ls   float64
+		c    int
+	}
+	var silent []silentDev
 	q(`SELECT addr,last_seen,count FROM devices WHERE count>=5 AND addr!=0 ORDER BY last_seen ASC LIMIT 40`,
 		func(r *sql.Rows) {
-			var addr, c int
-			var ls float64
-			r.Scan(&addr, &ls, &c)
-			age := now - ls
-			if age < 1800 {
-				return
+			var sd silentDev
+			r.Scan(&sd.addr, &sd.ls, &sd.c)
+			if now-sd.ls >= 1800 {
+				silent = append(silent, sd)
 			}
-			sev := "notice"
-			if age > 7200 {
-				sev = "warning"
-			}
-			add(sev, "Silent device", fmt.Sprintf("not heard for %dm (was chatty: %d frames) — a candidate for the dropout you're chasing; power-cycle test or active-probe it", int(age/60), c), addr)
 		})
+	const silentClusterGapS = 600 // 10 minutes between last-seens = "went silent together"
+	i := 0
+	for i < len(silent) {
+		j := i + 1
+		for j < len(silent) && silent[j].ls-silent[j-1].ls <= silentClusterGapS {
+			j++
+		}
+		group := silent[i:j]
+		maxAge := now - group[0].ls
+		sev := "notice"
+		if maxAge > 7200 {
+			sev = "warning"
+		}
+		if len(group) >= 3 {
+			add(sev, "Silent device", fmt.Sprintf(
+				"%d devices all went silent within %s of each other, oldest %dm ago — likely a shared cause (capture dropout, interference, or a coordinator hiccup), not %d independent device failures; check those first before chasing individual devices",
+				len(group), humanDur(group[len(group)-1].ls-group[0].ls), int(maxAge/60), len(group)), -1)
+		} else {
+			for _, sd := range group {
+				age := now - sd.ls
+				s := "notice"
+				if age > 7200 {
+					s = "warning"
+				}
+				add(s, "Silent device", fmt.Sprintf("not heard for %dm (was chatty: %d frames) — a candidate for the dropout you're chasing; power-cycle test or active-probe it", int(age/60), sd.c), sd.addr)
+			}
+		}
+		i = j
+	}
+	// Rejoins — a real Association/Orphan/Coordinator-Realignment/Device-
+	// announce, not just a routine poll (see isJoinRelated in main.go). A
+	// device that keeps rejoining is losing its network connection and
+	// re-establishing it, which is a much stronger and more specific signal
+	// than the "Silent device" heuristic above — surface it mesh-wide so a
+	// repeat offender doesn't require opening its drawer to notice.
+	{
+		cutoff := now - 86400
+		rows, err := d.db.Query(`SELECT addr, COUNT(*), MAX(ts) FROM incidents
+		                         WHERE reason='rejoin' AND ts > ? GROUP BY addr HAVING COUNT(*) >= 2
+		                         ORDER BY COUNT(*) DESC LIMIT 20`, cutoff)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var addrHex string
+				var c int
+				var lastTs float64
+				rows.Scan(&addrHex, &c, &lastTs)
+				var addr int
+				fmt.Sscanf(addrHex, "0x%x", &addr)
+				sev := "notice"
+				if c >= 5 {
+					sev = "warning"
+				}
+				add(sev, "Rejoin", fmt.Sprintf(
+					"%d rejoin events in the last 24h, most recently %s ago — losing and re-establishing its network connection repeatedly, not just going quiet",
+					c, humanDur(now-lastTs)), addr)
+			}
+		}
+	}
 	// Coordinator presence — no 0x0000 traffic usually means wrong channel or a
 	// stalled capture.
 	var coordSeen float64
@@ -548,6 +1300,33 @@ func (d *DB) Diagnostics(ourPan int) []map[string]any {
 	if pkts > 200 && dec == 0 {
 		add("info", "Decryption", "no frames decrypted — set the network key in Config to decode payloads (addresses still work without it)", -1)
 	}
+	// HA/zigpy log entries — mesh-wide, so entries about the radio/transport
+	// layer itself (no single device involved, e.g. a UART framing error)
+	// still surface somewhere, instead of only ever showing up in a specific
+	// device's analysis when a "0xXXXX" happens to be present in the message.
+	q(`SELECT ts,level,logger,message,count FROM ha_log WHERE level IN ('ERROR','WARNING') ORDER BY ts DESC LIMIT 20`,
+		func(r *sql.Rows) {
+			var ts float64
+			var level, logger, message string
+			var count int
+			r.Scan(&ts, &level, &logger, &message, &count)
+			sev := "warning"
+			if level == "ERROR" {
+				sev = "error"
+			}
+			addr := -1
+			if m := haLogAddrRe.FindString(message); m != "" {
+				var v int
+				if _, err := fmt.Sscanf(m, "0x%x", &v); err == nil {
+					addr = v
+				}
+			}
+			countNote := ""
+			if count > 1 {
+				countNote = fmt.Sprintf(" (×%d)", count)
+			}
+			add(sev, "HA/zigpy log", fmt.Sprintf("%s%s — %s (%s)", message, countNote, humanDur(now-ts)+" ago", logger), addr)
+		})
 	if len(out) == 0 {
 		add("info", "All clear", "no link/route/signal issues detected yet — keep capturing", -1)
 	}
@@ -638,6 +1417,100 @@ func (d *DB) Packets(limit int) []map[string]any {
 		}
 	}
 	return out
+}
+
+// histCols maps an RSSI histogram bin index to its pan_minutes column. Column
+// names come only from this fixed table (never user input) — the dynamic SQL
+// in IngestFrame is safe.
+var histCols = [8]string{"h0", "h1", "h2", "h3", "h4", "h5", "h6", "h7"}
+
+// Airtime aggregates the pan_minutes rollup over the last windowS seconds:
+// frames/min by PAN (with each PAN's channels and RSSI histogram) plus
+// per-channel totals — "who is using the air, and how loudly".
+func (d *DB) Airtime(windowS int) map[string]any {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	now := time.Now().Unix()
+	since := int(now)/60 - windowS/60
+	type agg struct {
+		frames, rssiSum int
+		hist            [8]int
+		channels        map[int]int
+		series          map[int]int
+	}
+	byPan := map[int]*agg{}
+	chTotals := map[int]int{}
+	rows, _ := d.db.Query(`SELECT bucket,pan,channel,frames,rssi_sum,
+	 h0,h1,h2,h3,h4,h5,h6,h7 FROM pan_minutes WHERE bucket>=?`, since)
+	if rows != nil {
+		defer rows.Close()
+		for rows.Next() {
+			var bucket, pan, ch, frames, rssiSum int
+			var h [8]int
+			rows.Scan(&bucket, &pan, &ch, &frames, &rssiSum,
+				&h[0], &h[1], &h[2], &h[3], &h[4], &h[5], &h[6], &h[7])
+			a := byPan[pan]
+			if a == nil {
+				a = &agg{channels: map[int]int{}, series: map[int]int{}}
+				byPan[pan] = a
+			}
+			a.frames += frames
+			a.rssiSum += rssiSum
+			for i := range h {
+				a.hist[i] += h[i]
+			}
+			a.channels[ch] += frames
+			a.series[bucket] += frames
+			chTotals[ch] += frames
+		}
+	}
+	labels := map[int]string{}
+	if lr, err := d.db.Query(`SELECT pan,label FROM pans WHERE label IS NOT NULL AND label!=''`); err == nil {
+		for lr.Next() {
+			var pan int
+			var label string
+			lr.Scan(&pan, &label)
+			labels[pan] = label
+		}
+		lr.Close()
+	}
+	var pansOut []map[string]any
+	for pan, a := range byPan {
+		chans := make([]int, 0, len(a.channels))
+		for c := range a.channels {
+			chans = append(chans, c)
+		}
+		sort.Slice(chans, func(i, j int) bool { return a.channels[chans[i]] > a.channels[chans[j]] })
+		buckets := make([]int, 0, len(a.series))
+		for b := range a.series {
+			buckets = append(buckets, b)
+		}
+		sort.Ints(buckets)
+		series := make([][2]int, len(buckets))
+		for i, b := range buckets {
+			series[i] = [2]int{b, a.series[b]}
+		}
+		panHex := "(none)"
+		if pan >= 0 {
+			panHex = fmt.Sprintf("0x%04x", uint16(pan))
+		}
+		pansOut = append(pansOut, map[string]any{
+			"pan": panHex, "pan_int": pan, "label": labels[pan],
+			"frames": a.frames, "rssi_avg": a.rssiSum / max(a.frames, 1),
+			"channels": chans, "hist": a.hist, "series": series,
+		})
+	}
+	sort.Slice(pansOut, func(i, j int) bool { return pansOut[i]["frames"].(int) > pansOut[j]["frames"].(int) })
+	chansOut := []map[string]any{}
+	for c := 11; c <= 26; c++ {
+		if chTotals[c] > 0 {
+			chansOut = append(chansOut, map[string]any{"channel": c, "frames": chTotals[c]})
+		}
+	}
+	return map[string]any{
+		"window_s": windowS, "bucket_s": 60, "now": now,
+		"pans": pansOut, "channels": chansOut,
+	}
 }
 
 // Spectrum returns recent ED samples.

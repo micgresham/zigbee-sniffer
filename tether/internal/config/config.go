@@ -24,6 +24,14 @@ type Config struct {
 	HTTPPort  int      // web UI port
 	Ports     []string // serial ports
 	ZHABackup string   // ZHA backup JSON path
+	// PanID is the home network's PAN, explicitly confirmed (via the UI's "set
+	// as home network" control) or first learned from a ZHA backup file. Once
+	// set, it takes priority over re-deriving from the backup file on a later
+	// run — the backup is a point-in-time snapshot and goes stale if the
+	// network's PAN ever changes (e.g. an automatic Zigbee PAN-conflict
+	// resolution), which would otherwise silently flip every real device to
+	// "foreign" with no way to notice except a broken-looking routing tree.
+	PanID uint16
 	// RadioRoles maps radio-id → role, e.g. "0=sniffer,1=spectrum,2=tester".
 	RadioRoles string
 	HopDwellMs int // channel-hop dwell (0 = pinned)
@@ -78,6 +86,9 @@ func Load(path string) *Config {
 			c.HTTPPort, _ = strconv.Atoi(v)
 		case "zha_backup":
 			c.ZHABackup = v
+		case "pan":
+			p, _ := strconv.ParseUint(strings.TrimPrefix(v, "0x"), 16, 16)
+			c.PanID = uint16(p)
 		case "radio_roles":
 			c.RadioRoles = v
 		case "hop_dwell_ms":
@@ -128,6 +139,9 @@ func (c *Config) Save(path string) error {
 		fmt.Fprintf(&b, "http_port: %d\n", c.HTTPPort)
 	}
 	w("zha_backup", c.ZHABackup)
+	if c.PanID != 0 {
+		fmt.Fprintf(&b, "pan: 0x%04x\n", c.PanID)
+	}
 	w("radio_roles", c.RadioRoles)
 	if c.HopDwellMs > 0 {
 		fmt.Fprintf(&b, "hop_dwell_ms: %d\n", c.HopDwellMs)
