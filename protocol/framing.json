@@ -383,6 +383,21 @@
                     "type": "u8"
                 }
             ]
+        },
+        "CMD_SAT_RELAY": {
+            "type": 148,
+            "dir": "host_to_device",
+            "min_fw": "0.32",
+            "fields": [
+                {
+                    "name": "target",
+                    "type": "u8"
+                },
+                {
+                    "name": "inner_frame",
+                    "type": "bytes"
+                }
+            ]
         }
     },
     "enums": {

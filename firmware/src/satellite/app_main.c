@@ -16,6 +16,10 @@
 #include "config_nvs.h"
 #include "radio_capture.h"
 #include "transport_spi.h"
+#include "ed_scan.h"
+#include "probe.h"
+#include "beacon.h"
+#include "esp_ieee802154.h"
 #include "ota.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -25,6 +29,13 @@ static const char *TAG = "satellite";
 static device_config_t s_cfg;
 static volatile uint32_t s_dropped;
 static volatile bool s_reboot_pending;
+// Operating mode + hop set, mirroring the primary (usb-sniffer) — a satellite
+// is now a full radio, not capture-only: it can run ED sweeps (spectrum role),
+// channel-hop (hopper role), and TX probes/beacons/raw (tester role). Set by
+// relayed CMD_SET_MODE / CMD_SET_HOP; read by the main loop below.
+static volatile uint8_t  s_mode;
+static volatile uint32_t s_hop_mask;
+static volatile uint16_t s_hop_dwell_ms;
 
 // Periodic liveness/status heartbeat (~1Hz), independent of captured frames —
 // without this, a satellite on a quiet channel (or mid-debug with no traffic)
@@ -39,10 +50,11 @@ static void sat_send_status(uint64_t boot_us)
     size_t n = 0;
     uint32_t uptime = (uint32_t)((esp_timer_get_time() - boot_us) / 1000000ULL);
     p[n++] = s_cfg.radio_id;
-    p[n++] = MODE_CAPTURE;                 // satellite is always capturing once started
-    p[n++] = s_cfg.channel;
-    for (int i = 0; i < 4; i++) p[n++] = 0;   // hop_mask: satellite doesn't hop
-    p[n++] = 0; p[n++] = 0;                   // hop_dwell_ms
+    p[n++] = s_mode;                          // satellites now run any mode, not just capture
+    p[n++] = radio_capture_get_channel();
+    for (int i = 0; i < 4; i++) p[n++] = (uint8_t)(s_hop_mask >> (8 * i));
+    p[n++] = (uint8_t)(s_hop_dwell_ms & 0xFF);
+    p[n++] = (uint8_t)(s_hop_dwell_ms >> 8);
     for (int i = 0; i < 4; i++) p[n++] = (uint8_t)(uptime >> (8 * i));
     uint32_t cap = radio_capture_count();
     for (int i = 0; i < 4; i++) p[n++] = (uint8_t)(cap >> (8 * i));
@@ -82,6 +94,40 @@ static void sat_send_ota_status(void)
         vTaskDelay(pdMS_TO_TICKS(5));
     }
     ESP_LOGW(TAG, "OTA status send failed after retries (ring buffer stayed full)");
+}
+
+// ED sweep sample → MSG_ED_RESULT over SPI (same payload layout as the primary's
+// ed_cb in usb-sniffer). The primary relays it up to the host opaquely; the
+// radio_id in the payload attributes it to this satellite.
+static void sat_ed_cb(const ed_sample_t *s, void *ctx)
+{
+    (void)ctx;
+    uint8_t p[16];
+    size_t n = 0;
+    p[n++] = s_cfg.radio_id;
+    p[n++] = s->channel;
+    for (int i = 0; i < 8; i++) p[n++] = (uint8_t)(s->timestamp >> (8 * i));
+    p[n++] = (uint8_t)s->ed_dbm;
+    p[n++] = (uint8_t)(s->sweep_id & 0xFF);
+    p[n++] = (uint8_t)(s->sweep_id >> 8);
+    uint8_t out[ZB_MAX_TX];
+    size_t m = zb_encode(MSG_ED_RESULT, p, (uint16_t)n, out, sizeof(out));
+    if (m && !spi_slave_send(out, m)) s_dropped++;
+}
+
+// Active-probe result → MSG_PROBE_RESULT over SPI (matches the primary's probe_cb).
+static void sat_probe_cb(uint16_t target, bool acked, int8_t rssi, uint8_t lqi)
+{
+    uint8_t p[6];
+    p[0] = s_cfg.radio_id;
+    p[1] = target & 0xFF;
+    p[2] = target >> 8;
+    p[3] = acked ? 1 : 0;
+    p[4] = (uint8_t)rssi;
+    p[5] = lqi;
+    uint8_t out[ZB_MAX_TX];
+    size_t m = zb_encode(MSG_PROBE_RESULT, p, sizeof(p), out, sizeof(out));
+    if (m) spi_slave_send(out, m);
 }
 
 // OTA commands are relayed to a dedicated task instead of handled inline in
@@ -218,6 +264,54 @@ static void on_command(uint8_t type, const uint8_t *p, uint16_t len)
         radio_capture_stop();
         radio_unlock();
         break;
+    // Full radio command set (relayed generically via CMD_SAT_RELAY on the
+    // primary), making a satellite symmetric with the primary radio.
+    case CMD_SET_MODE:
+        // Just a flag the main loop reads (no HAL) — cheap so a mode change is
+        // honored even while the loop holds the radio for a sweep.
+        if (len >= 1) s_mode = p[0];
+        break;
+    case CMD_SET_HOP:
+        if (len >= 6) {
+            s_hop_mask = (uint32_t)p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24);
+            s_hop_dwell_ms = (uint16_t)p[4] | (p[5] << 8);
+        }
+        break;
+    case CMD_ED_SCAN:
+        if (len >= 6) {
+            uint32_t mask = (uint32_t)p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24);
+            uint32_t dwell_ms = (uint16_t)p[4] | (p[5] << 8);
+            radio_lock();
+            ed_sweep(mask, dwell_ms * 1000, sat_ed_cb, NULL);
+            radio_unlock();
+        }
+        break;
+    case CMD_PROBE:
+        if (len >= 4) {
+            uint16_t target = (uint16_t)p[0] | (p[1] << 8);
+            uint16_t pan    = (uint16_t)p[2] | (p[3] << 8);
+            radio_lock();
+            probe_send(target, pan);
+            radio_unlock();
+        }
+        break;
+    case CMD_BEACON_REQ:
+        radio_lock();
+        beacon_request_send();
+        radio_unlock();
+        break;
+    case CMD_TX_RAW:
+        if (len >= 3 && len <= 125) {
+            radio_lock();
+            esp_ieee802154_set_rx_when_idle(true);
+            esp_ieee802154_receive();
+            uint8_t f[1 + 128];
+            f[0] = len + 2;              // PHY length includes the 2-byte FCS the radio appends
+            memcpy(&f[1], p, len);
+            esp_ieee802154_transmit(f, false);
+            radio_unlock();
+        }
+        break;
     // OTA over SPI — the satellite IS the target, so the target byte is
     // ignored. Handed off to ota_task() (see ota_enqueue() above) rather than
     // processed here inline.
@@ -236,6 +330,9 @@ void app_main(void)
 {
     config_load(&s_cfg);
     if (s_cfg.radio_id == 0) s_cfg.radio_id = 1;   // satellites are 1..3
+    s_mode = MODE_CAPTURE;                          // default role: sniffer
+    s_hop_mask = s_cfg.hop_mask;
+    s_hop_dwell_ms = s_cfg.hop_dwell_ms;
 
     sat_led_init();
     sat_led_set_channel(s_cfg.channel);
@@ -245,6 +342,7 @@ void app_main(void)
 
     spi_slave_transport_init(on_command);
     radio_capture_init(s_cfg.channel, s_cfg.radio_id);
+    probe_init(sat_probe_cb);
     radio_capture_start();
     ESP_LOGI(TAG, "satellite up: radio_id=%u ch=%u (SPI forward)",
              s_cfg.radio_id, s_cfg.channel);
@@ -255,17 +353,47 @@ void app_main(void)
     bool logged_first_capture = false;
     uint64_t last_status = boot_us;
     uint64_t last_heartbeat = boot_us;
+    uint64_t last_hop = boot_us;
+    uint8_t hop_idx = 0;
     for (;;) {
-        if (radio_capture_recv(&cf, 50)) {
-            if (!logged_first_capture) {
-                logged_first_capture = true;
-                ESP_LOGI(TAG, "first frame captured locally: ch=%u len=%u rssi=%d — radio RX is live",
-                         cf.channel, cf.len, cf.rssi);
+        // Mode-driven, mirroring the primary's main loop: capture drains frames,
+        // ED_SWEEP runs a continuous sweep, else idle. Each holds the radio lock
+        // only briefly so a relayed command (mode/channel change, probe) applies
+        // promptly on the next pass.
+        if (s_mode == MODE_CAPTURE || s_mode == MODE_CAPTURE_PLUS_ED) {
+            if (radio_capture_recv(&cf, 50)) {
+                if (!logged_first_capture) {
+                    logged_first_capture = true;
+                    ESP_LOGI(TAG, "first frame captured locally: ch=%u len=%u rssi=%d — radio RX is live",
+                             cf.channel, cf.len, cf.rssi);
+                }
+                size_t n = zb_encode_captured(s_cfg.radio_id, &cf, out, sizeof(out));
+                if (n && !spi_slave_send(out, n)) s_dropped++;
             }
-            size_t n = zb_encode_captured(s_cfg.radio_id, &cf, out, sizeof(out));
-            if (n && !spi_slave_send(out, n)) s_dropped++;
+        } else if (s_mode == MODE_ED_SWEEP) {
+            radio_lock();
+            ed_sweep(s_hop_mask, (s_hop_dwell_ms ? s_hop_dwell_ms : 5) * 1000, sat_ed_cb, NULL);
+            radio_unlock();
+            vTaskDelay(pdMS_TO_TICKS(50));
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(20));
         }
         uint64_t now = esp_timer_get_time();
+        // Channel hopping during capture (hopper role).
+        if (s_hop_dwell_ms && s_mode == MODE_CAPTURE &&
+            (now - last_hop) / 1000 >= s_hop_dwell_ms) {
+            last_hop = now;
+            radio_lock();
+            for (int tries = 0; tries < 16; tries++) {
+                hop_idx = (hop_idx + 1) % 16;
+                if (s_hop_mask & (1u << hop_idx)) {
+                    radio_capture_set_channel(ZB_CHANNEL_MIN + hop_idx);
+                    sat_led_set_channel(ZB_CHANNEL_MIN + hop_idx);
+                    break;
+                }
+            }
+            radio_unlock();
+        }
         if (now - last_status >= 1000000ULL) {   // ~1Hz, independent of captured frames —
             last_status = now;                   // this is what makes the satellite
             sat_send_status(boot_us);            // discoverable on a silent channel.

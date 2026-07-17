@@ -143,9 +143,13 @@ static uint8_t tag_if_colliding(uint8_t radio_id)
 // by the radio_id already embedded in the payload.
 static void msg_from_sat(uint8_t type, const uint8_t *pl, uint16_t len)
 {
-    if (type == MSG_STATUS && len >= 1) {
+    if ((type == MSG_STATUS || type == MSG_ED_RESULT || type == MSG_PROBE_RESULT) && len >= 1) {
+        // All three carry the satellite's radio_id in payload[0]; tag it if it
+        // collides with the primary's own id so the host keeps them distinct.
+        // ED sweeps (spectrum role) and probes (tester role) now originate on
+        // satellites too, so their results must be relayed up like STATUS was.
         uint8_t fixed[64];
-        if (len > sizeof(fixed)) return;   // STATUS is a fixed 27B; guard against a corrupt relay
+        if (len > sizeof(fixed)) return;
         memcpy(fixed, pl, len);
         fixed[0] = tag_if_colliding(fixed[0]);
         send_frame(type, fixed, len);
@@ -334,6 +338,18 @@ static void handle_command(uint8_t type, const uint8_t *p, uint16_t len)
     case CMD_SAT_START:
     case CMD_SAT_STOP:
         sat_cmd_relay(type, p, len);
+        break;
+    case CMD_SAT_RELAY:
+        // Generic relay: p[0]=target, p[1..]=a complete inner zb frame. Forward
+        // the inner frame verbatim over SPI — no re-encoding, no per-command
+        // mapping, so any command reaches the satellite (see CMD_SAT_RELAY in
+        // proto.h). This is how satellites do ED/hop/probe/beacon/raw-TX.
+        if (len >= 1) {
+            uint8_t target = p[0];
+            if (target >= 1 && target <= PRI_SAT_COUNT && len > 1) {
+                spi_master_send_to(target - 1, p + 1, len - 1);
+            }
+        }
         break;
     case CMD_GET_STATUS:
         send_status();

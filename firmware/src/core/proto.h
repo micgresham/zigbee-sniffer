@@ -52,11 +52,19 @@ typedef enum {
     // Relayed satellite control (tethered/standalone primary only): the primary
     // strips target(1) and forwards the plain inner command (CMD_SET_CHANNEL /
     // CMD_START / CMD_STOP) to satellite `target` over SPI — a satellite has no
-    // serial port of its own to address directly. No mode/hop/ED equivalent:
-    // satellite firmware doesn't support those.
+    // serial port of its own to address directly. Kept for backward
+    // compatibility; new code uses the generic CMD_SAT_RELAY below.
     CMD_SAT_SET_CHANNEL = 0x91, // target(1) channel(1)
     CMD_SAT_START       = 0x92, // target(1)
     CMD_SAT_STOP        = 0x93, // target(1)
+    // Generic satellite relay: payload = target(1) + a COMPLETE inner zb frame
+    // (magic..crc). The primary strips target(1) and forwards the remaining
+    // bytes verbatim over SPI to satellite `target` — no per-command mapping,
+    // so any host->device command (mode, ED, hop, probe, beacon, raw TX, OTA)
+    // reaches a satellite. The satellite decodes the inner frame with its
+    // normal SPI decoder and dispatches it through on_command() as if received
+    // directly. Satellites are thus fully symmetric with the primary radio.
+    CMD_SAT_RELAY       = 0x94, // target(1) inner_frame(...)
 } zb_msg_type_t;
 
 // OTA target: 0 = this (tethered) C6, 1..3 = satellite over SPI.
