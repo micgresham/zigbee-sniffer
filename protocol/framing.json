@@ -1,368 +1,402 @@
 {
-  "$comment": "Machine-readable mirror of framing.md. Keep both in sync. All integers little-endian.",
-  "version": 1,
-  "magic": [
-    90,
-    190
-  ],
-  "crc": {
-    "algorithm": "CRC-16/CCITT-FALSE",
-    "poly": "0x1021",
-    "init": "0xFFFF",
-    "covers": [
-      "ver",
-      "type",
-      "len",
-      "payload"
-    ]
-  },
-  "header": [
-    {
-      "name": "magic0",
-      "type": "u8",
-      "const": 90
+    "$comment": "Machine-readable mirror of framing.md. Keep both in sync. All integers little-endian.",
+    "version": 1,
+    "magic": [
+        90,
+        190
+    ],
+    "crc": {
+        "algorithm": "CRC-16/CCITT-FALSE",
+        "poly": "0x1021",
+        "init": "0xFFFF",
+        "covers": [
+            "ver",
+            "type",
+            "len",
+            "payload"
+        ]
     },
-    {
-      "name": "magic1",
-      "type": "u8",
-      "const": 190
+    "header": [
+        {
+            "name": "magic0",
+            "type": "u8",
+            "const": 90
+        },
+        {
+            "name": "magic1",
+            "type": "u8",
+            "const": 190
+        },
+        {
+            "name": "ver",
+            "type": "u8"
+        },
+        {
+            "name": "type",
+            "type": "u8"
+        },
+        {
+            "name": "len",
+            "type": "u16"
+        }
+    ],
+    "trailer": [
+        {
+            "name": "crc16",
+            "type": "u16"
+        }
+    ],
+    "messages": {
+        "CAPTURED_FRAME": {
+            "type": 1,
+            "dir": "device_to_host",
+            "fields": [
+                {
+                    "name": "radio_id",
+                    "type": "u8"
+                },
+                {
+                    "name": "channel",
+                    "type": "u8"
+                },
+                {
+                    "name": "rssi",
+                    "type": "i8"
+                },
+                {
+                    "name": "lqi",
+                    "type": "u8"
+                },
+                {
+                    "name": "flags",
+                    "type": "u8"
+                },
+                {
+                    "name": "timestamp",
+                    "type": "u64"
+                },
+                {
+                    "name": "mpdu_len",
+                    "type": "u8"
+                },
+                {
+                    "name": "mpdu",
+                    "type": "bytes",
+                    "len_field": "mpdu_len"
+                }
+            ]
+        },
+        "ED_RESULT": {
+            "type": 2,
+            "dir": "device_to_host",
+            "fields": [
+                {
+                    "name": "radio_id",
+                    "type": "u8"
+                },
+                {
+                    "name": "channel",
+                    "type": "u8"
+                },
+                {
+                    "name": "timestamp",
+                    "type": "u64"
+                },
+                {
+                    "name": "ed_dbm",
+                    "type": "i8"
+                },
+                {
+                    "name": "sweep_id",
+                    "type": "u16"
+                }
+            ]
+        },
+        "STATUS": {
+            "type": 3,
+            "dir": "device_to_host",
+            "fields": [
+                {
+                    "name": "radio_id",
+                    "type": "u8"
+                },
+                {
+                    "name": "mode",
+                    "type": "u8"
+                },
+                {
+                    "name": "channel",
+                    "type": "u8"
+                },
+                {
+                    "name": "hop_mask",
+                    "type": "u32"
+                },
+                {
+                    "name": "hop_dwell_ms",
+                    "type": "u16"
+                },
+                {
+                    "name": "uptime_s",
+                    "type": "u32"
+                },
+                {
+                    "name": "captured",
+                    "type": "u32"
+                },
+                {
+                    "name": "dropped_crc",
+                    "type": "u32"
+                },
+                {
+                    "name": "dropped_buf",
+                    "type": "u32"
+                },
+                {
+                    "name": "fw_major",
+                    "type": "u8"
+                },
+                {
+                    "name": "fw_minor",
+                    "type": "u8"
+                }
+            ]
+        },
+        "LOG": {
+            "type": 4,
+            "dir": "device_to_host",
+            "fields": [
+                {
+                    "name": "text",
+                    "type": "utf8"
+                }
+            ]
+        },
+        "ACK": {
+            "type": 5,
+            "dir": "device_to_host",
+            "fields": [
+                {
+                    "name": "cmd_type",
+                    "type": "u8"
+                },
+                {
+                    "name": "result",
+                    "type": "u8"
+                }
+            ]
+        },
+        "CMD_SET_CHANNEL": {
+            "type": 129,
+            "dir": "host_to_device",
+            "fields": [
+                {
+                    "name": "channel",
+                    "type": "u8"
+                }
+            ]
+        },
+        "CMD_SET_MODE": {
+            "type": 130,
+            "dir": "host_to_device",
+            "fields": [
+                {
+                    "name": "mode",
+                    "type": "u8"
+                }
+            ]
+        },
+        "CMD_START": {
+            "type": 131,
+            "dir": "host_to_device",
+            "fields": []
+        },
+        "CMD_STOP": {
+            "type": 132,
+            "dir": "host_to_device",
+            "fields": []
+        },
+        "CMD_SET_HOP": {
+            "type": 133,
+            "dir": "host_to_device",
+            "fields": [
+                {
+                    "name": "hop_mask",
+                    "type": "u32"
+                },
+                {
+                    "name": "hop_dwell_ms",
+                    "type": "u16"
+                }
+            ]
+        },
+        "CMD_ED_SCAN": {
+            "type": 134,
+            "dir": "host_to_device",
+            "fields": [
+                {
+                    "name": "hop_mask",
+                    "type": "u32"
+                },
+                {
+                    "name": "dwell_ms",
+                    "type": "u16"
+                }
+            ]
+        },
+        "CMD_SET_KEY": {
+            "type": 135,
+            "dir": "host_to_device",
+            "fields": [
+                {
+                    "name": "key_present",
+                    "type": "u8"
+                },
+                {
+                    "name": "key",
+                    "type": "bytes",
+                    "len": 16,
+                    "optional_on": "key_present"
+                }
+            ]
+        },
+        "CMD_GET_STATUS": {
+            "type": 136,
+            "dir": "host_to_device",
+            "fields": []
+        },
+        "CMD_SET_RADIO_ID": {
+            "type": 137,
+            "dir": "host_to_device",
+            "fields": [
+                {
+                    "name": "radio_id",
+                    "type": "u8"
+                }
+            ]
+        },
+        "CMD_PROBE": {
+            "type": 138,
+            "dir": "host_to_device",
+            "fields": [
+                {
+                    "name": "target",
+                    "type": "u16le"
+                },
+                {
+                    "name": "pan",
+                    "type": "u16le"
+                }
+            ]
+        },
+        "CMD_OTA_BEGIN": {
+            "type": 139,
+            "dir": "host_to_device",
+            "fields": [
+                {
+                    "name": "target",
+                    "type": "u8"
+                },
+                {
+                    "name": "total_size",
+                    "type": "u32le"
+                },
+                {
+                    "name": "img_crc32",
+                    "type": "u32le"
+                }
+            ]
+        },
+        "CMD_OTA_DATA": {
+            "type": 140,
+            "dir": "host_to_device",
+            "fields": [
+                {
+                    "name": "target",
+                    "type": "u8"
+                },
+                {
+                    "name": "offset",
+                    "type": "u32le"
+                },
+                {
+                    "name": "chunk",
+                    "type": "bytes"
+                }
+            ]
+        },
+        "CMD_OTA_END": {
+            "type": 141,
+            "dir": "host_to_device",
+            "fields": [
+                {
+                    "name": "target",
+                    "type": "u8"
+                }
+            ]
+        },
+        "CMD_OTA_ABORT": {
+            "type": 142,
+            "dir": "host_to_device",
+            "fields": [
+                {
+                    "name": "target",
+                    "type": "u8"
+                }
+            ]
+        },
+        "CMD_BEACON_REQ": {
+            "type": 143,
+            "dir": "host_to_device",
+            "fields": []
+        },
+        "CMD_SAT_SET_CHANNEL": {
+            "type": 145,
+            "dir": "host_to_device",
+            "fields": [
+                {
+                    "name": "target",
+                    "type": "u8"
+                },
+                {
+                    "name": "channel",
+                    "type": "u8"
+                }
+            ]
+        },
+        "CMD_SAT_START": {
+            "type": 146,
+            "dir": "host_to_device",
+            "fields": [
+                {
+                    "name": "target",
+                    "type": "u8"
+                }
+            ]
+        },
+        "CMD_SAT_STOP": {
+            "type": 147,
+            "dir": "host_to_device",
+            "fields": [
+                {
+                    "name": "target",
+                    "type": "u8"
+                }
+            ]
+        }
     },
-    {
-      "name": "ver",
-      "type": "u8"
-    },
-    {
-      "name": "type",
-      "type": "u8"
-    },
-    {
-      "name": "len",
-      "type": "u16"
+    "enums": {
+        "mode": {
+            "IDLE": 0,
+            "CAPTURE": 1,
+            "ED_SWEEP": 2,
+            "CAPTURE_PLUS_ED": 3
+        },
+        "flags": {
+            "crc_ok": 1,
+            "promiscuous": 2,
+            "frame_pending": 4,
+            "was_acked": 8
+        }
     }
-  ],
-  "trailer": [
-    {
-      "name": "crc16",
-      "type": "u16"
-    }
-  ],
-  "messages": {
-    "CAPTURED_FRAME": {
-      "type": 1,
-      "dir": "device_to_host",
-      "fields": [
-        {
-          "name": "radio_id",
-          "type": "u8"
-        },
-        {
-          "name": "channel",
-          "type": "u8"
-        },
-        {
-          "name": "rssi",
-          "type": "i8"
-        },
-        {
-          "name": "lqi",
-          "type": "u8"
-        },
-        {
-          "name": "flags",
-          "type": "u8"
-        },
-        {
-          "name": "timestamp",
-          "type": "u64"
-        },
-        {
-          "name": "mpdu_len",
-          "type": "u8"
-        },
-        {
-          "name": "mpdu",
-          "type": "bytes",
-          "len_field": "mpdu_len"
-        }
-      ]
-    },
-    "ED_RESULT": {
-      "type": 2,
-      "dir": "device_to_host",
-      "fields": [
-        {
-          "name": "radio_id",
-          "type": "u8"
-        },
-        {
-          "name": "channel",
-          "type": "u8"
-        },
-        {
-          "name": "timestamp",
-          "type": "u64"
-        },
-        {
-          "name": "ed_dbm",
-          "type": "i8"
-        },
-        {
-          "name": "sweep_id",
-          "type": "u16"
-        }
-      ]
-    },
-    "STATUS": {
-      "type": 3,
-      "dir": "device_to_host",
-      "fields": [
-        {
-          "name": "radio_id",
-          "type": "u8"
-        },
-        {
-          "name": "mode",
-          "type": "u8"
-        },
-        {
-          "name": "channel",
-          "type": "u8"
-        },
-        {
-          "name": "hop_mask",
-          "type": "u32"
-        },
-        {
-          "name": "hop_dwell_ms",
-          "type": "u16"
-        },
-        {
-          "name": "uptime_s",
-          "type": "u32"
-        },
-        {
-          "name": "captured",
-          "type": "u32"
-        },
-        {
-          "name": "dropped_crc",
-          "type": "u32"
-        },
-        {
-          "name": "dropped_buf",
-          "type": "u32"
-        },
-        {
-          "name": "fw_major",
-          "type": "u8"
-        },
-        {
-          "name": "fw_minor",
-          "type": "u8"
-        }
-      ]
-    },
-    "LOG": {
-      "type": 4,
-      "dir": "device_to_host",
-      "fields": [
-        {
-          "name": "text",
-          "type": "utf8"
-        }
-      ]
-    },
-    "ACK": {
-      "type": 5,
-      "dir": "device_to_host",
-      "fields": [
-        {
-          "name": "cmd_type",
-          "type": "u8"
-        },
-        {
-          "name": "result",
-          "type": "u8"
-        }
-      ]
-    },
-    "CMD_SET_CHANNEL": {
-      "type": 129,
-      "dir": "host_to_device",
-      "fields": [
-        {
-          "name": "channel",
-          "type": "u8"
-        }
-      ]
-    },
-    "CMD_SET_MODE": {
-      "type": 130,
-      "dir": "host_to_device",
-      "fields": [
-        {
-          "name": "mode",
-          "type": "u8"
-        }
-      ]
-    },
-    "CMD_START": {
-      "type": 131,
-      "dir": "host_to_device",
-      "fields": []
-    },
-    "CMD_STOP": {
-      "type": 132,
-      "dir": "host_to_device",
-      "fields": []
-    },
-    "CMD_SET_HOP": {
-      "type": 133,
-      "dir": "host_to_device",
-      "fields": [
-        {
-          "name": "hop_mask",
-          "type": "u32"
-        },
-        {
-          "name": "hop_dwell_ms",
-          "type": "u16"
-        }
-      ]
-    },
-    "CMD_ED_SCAN": {
-      "type": 134,
-      "dir": "host_to_device",
-      "fields": [
-        {
-          "name": "hop_mask",
-          "type": "u32"
-        },
-        {
-          "name": "dwell_ms",
-          "type": "u16"
-        }
-      ]
-    },
-    "CMD_SET_KEY": {
-      "type": 135,
-      "dir": "host_to_device",
-      "fields": [
-        {
-          "name": "key_present",
-          "type": "u8"
-        },
-        {
-          "name": "key",
-          "type": "bytes",
-          "len": 16,
-          "optional_on": "key_present"
-        }
-      ]
-    },
-    "CMD_GET_STATUS": {
-      "type": 136,
-      "dir": "host_to_device",
-      "fields": []
-    },
-    "CMD_SET_RADIO_ID": {
-      "type": 137,
-      "dir": "host_to_device",
-      "fields": [
-        {
-          "name": "radio_id",
-          "type": "u8"
-        }
-      ]
-    },
-    "CMD_PROBE": {
-      "type": 138,
-      "dir": "host_to_device",
-      "fields": [
-        {
-          "name": "target",
-          "type": "u16le"
-        },
-        {
-          "name": "pan",
-          "type": "u16le"
-        }
-      ]
-    },
-    "CMD_OTA_BEGIN": {
-      "type": 139,
-      "dir": "host_to_device",
-      "fields": [
-        {
-          "name": "target",
-          "type": "u8"
-        },
-        {
-          "name": "total_size",
-          "type": "u32le"
-        },
-        {
-          "name": "img_crc32",
-          "type": "u32le"
-        }
-      ]
-    },
-    "CMD_OTA_DATA": {
-      "type": 140,
-      "dir": "host_to_device",
-      "fields": [
-        {
-          "name": "target",
-          "type": "u8"
-        },
-        {
-          "name": "offset",
-          "type": "u32le"
-        },
-        {
-          "name": "chunk",
-          "type": "bytes"
-        }
-      ]
-    },
-    "CMD_OTA_END": {
-      "type": 141,
-      "dir": "host_to_device",
-      "fields": [
-        {
-          "name": "target",
-          "type": "u8"
-        }
-      ]
-    },
-    "CMD_OTA_ABORT": {
-      "type": 142,
-      "dir": "host_to_device",
-      "fields": [
-        {
-          "name": "target",
-          "type": "u8"
-        }
-      ]
-    },
-    "CMD_BEACON_REQ": {
-      "type": 143,
-      "dir": "host_to_device",
-      "fields": []
-    }
-  },
-  "enums": {
-    "mode": {
-      "IDLE": 0,
-      "CAPTURE": 1,
-      "ED_SWEEP": 2,
-      "CAPTURE_PLUS_ED": 3
-    },
-    "flags": {
-      "crc_ok": 1,
-      "promiscuous": 2,
-      "frame_pending": 4,
-      "was_acked": 8
-    }
-  }
 }

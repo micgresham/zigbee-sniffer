@@ -49,11 +49,27 @@ typedef enum {
     CMD_OTA_ABORT      = 0x8E,   // target(1)
     CMD_BEACON_REQ     = 0x8F,   // active scan: TX an 802.15.4 beacon request (no payload)
     CMD_TX_RAW         = 0x90,   // transmit a host-built raw MPDU (radio appends FCS)
+    // Relayed satellite control (tethered/standalone primary only): the primary
+    // strips target(1) and forwards the plain inner command (CMD_SET_CHANNEL /
+    // CMD_START / CMD_STOP) to satellite `target` over SPI — a satellite has no
+    // serial port of its own to address directly. No mode/hop/ED equivalent:
+    // satellite firmware doesn't support those.
+    CMD_SAT_SET_CHANNEL = 0x91, // target(1) channel(1)
+    CMD_SAT_START       = 0x92, // target(1)
+    CMD_SAT_STOP        = 0x93, // target(1)
 } zb_msg_type_t;
 
 // OTA target: 0 = this (tethered) C6, 1..3 = satellite over SPI.
 // OTA state (MSG_OTA_STATUS.state).
 enum { OTA_IDLE = 0, OTA_RECEIVING, OTA_WRITING, OTA_VERIFYING, OTA_OK, OTA_ERROR };
+
+// Set on a relayed satellite's CAPTURED_FRAME/STATUS radio_id byte by the
+// primary ONLY when that satellite's radio_id collides with the primary's own
+// (e.g. both left at their default) — without it the two are indistinguishable
+// on the wire and silently merge into one radio host-side. The low 7 bits are
+// still the satellite's real radio_id (1..3); mask this bit off to display it.
+// Fix the collision by giving the satellite a unique radio_id.
+#define RADIO_ID_COLLISION_BIT 0x80
 
 // Capture/operating mode (see framing.md `mode` enum)
 typedef enum {

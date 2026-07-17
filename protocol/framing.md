@@ -124,6 +124,15 @@ Firmware-update progress (see `CMD_OTA_*` and [docs/ota.md](../docs/ota.md)). Pa
 | `0x8E` | `CMD_OTA_ABORT`   | `target(1)` — cancel an in-progress update |
 | `0x8F` | `CMD_BEACON_REQ`  | — TX an 802.15.4 beacon request on the current channel (active network scan). Beacon replies arrive as ordinary `CAPTURED_FRAME`s. Requires firmware ≥ 0.26. |
 | `0x90` | `CMD_TX_RAW`      | `mpdu(n)` — transmit a host-built raw MPDU (radio appends the FCS). Used for active ZDO interrogation; **transmits on the live network**. Requires firmware ≥ 0.28. |
+| `0x91` | `CMD_SAT_SET_CHANNEL` | `target(1, 1..3)` `channel(1, 11..26)` — relayed to satellite `target` over SPI (tethered/standalone primary only); lets one satellite sit on a different channel than the primary. |
+| `0x92` | `CMD_SAT_START`   | `target(1, 1..3)` — relayed: (re)start capture on satellite `target`. |
+| `0x93` | `CMD_SAT_STOP`    | `target(1, 1..3)` — relayed: stop capture on satellite `target`. |
+
+The `CMD_SAT_*` commands exist because `CMD_SET_CHANNEL`/`CMD_START`/`CMD_STOP` (above) always apply
+to the receiving device's **own** local radio — a satellite reached over SPI has no serial port of
+its own to send those to directly. The primary de-frames the `target` byte, strips it, and relays
+the plain inner command (`CMD_SET_CHANNEL`/`CMD_START`/`CMD_STOP`) to that satellite's SPI slave.
+Satellite firmware has no `mode`/hop/ED concept — only channel + start/stop are meaningful for it.
 
 ---
 

@@ -121,31 +121,76 @@ static void send_ota_status(uint8_t target)
 
 static volatile bool s_reboot_pending;
 
-// Relay a satellite's OTA status (arriving over SPI) up to the host.
-static void ota_status_from_sat(uint8_t type, const uint8_t *pl, uint16_t len)
+// If a satellite's radio_id collides with this C6's own, tag it with the high
+// bit so the host can still tell the two apart instead of silently merging
+// them into one radio (see RADIO_ID_COLLISION_BIT in proto.h). Logs once.
+static uint8_t tag_if_colliding(uint8_t radio_id)
 {
-    if (type == MSG_OTA_STATUS) send_frame(MSG_OTA_STATUS, pl, len);
+    if (radio_id != s_cfg.radio_id) return radio_id;
+    static bool warned;
+    if (!warned) {
+        warned = true;
+        ESP_LOGW(TAG, "satellite radio_id=%u collides with this primary's own id=%u — "
+                 "reassign one via the dashboard's Radio ID field", radio_id, s_cfg.radio_id);
+    }
+    return radio_id | RADIO_ID_COLLISION_BIT;
 }
 
-// Bring up the SPI master on first use (satellites are rarely present, so we
-// don't init it during normal capture — this keeps the USB path untouched).
-static void ensure_spi_master(void)
+// Relay a satellite's non-frame messages (arriving over SPI) up to the host,
+// opaquely — OTA progress, and its ~1Hz STATUS heartbeat (sent independent of
+// captured frames so a satellite on a silent channel is still discoverable;
+// see sat_send_status() in satellite/app_main.c). The host tells radios apart
+// by the radio_id already embedded in the payload.
+static void msg_from_sat(uint8_t type, const uint8_t *pl, uint16_t len)
 {
-    static bool up;
-    if (up) return;
-    spi_master_init(NULL);                 // no frame cb — we only relay OTA
-    spi_master_set_msg_cb(ota_status_from_sat);
-    up = true;
+    if (type == MSG_STATUS && len >= 1) {
+        uint8_t fixed[64];
+        if (len > sizeof(fixed)) return;   // STATUS is a fixed 27B; guard against a corrupt relay
+        memcpy(fixed, pl, len);
+        fixed[0] = tag_if_colliding(fixed[0]);
+        send_frame(type, fixed, len);
+    } else if (type == MSG_OTA_STATUS) {
+        send_frame(type, pl, len);
+    }
 }
 
-// Re-frame an OTA command and forward it to satellite (target-1) over SPI.
-static void ota_relay(uint8_t target, uint8_t type, const uint8_t *p, uint16_t len)
+// A frame arrived from an SPI satellite radio: forward it to the host over USB,
+// same framing as our own captures — the host tells them apart by radio_id
+// (0 = this C6's own radio, 1..3 = satellites). See docs/multi-radio.md.
+static void satellite_frame_cb(uint8_t radio_id, const captured_frame_t *cf)
+{
+    static bool logged;
+    if (!logged) { logged = true; ESP_LOGI(TAG, "first frame relayed from satellite radio_id=%u — SPI link is up", radio_id); }
+    radio_id = tag_if_colliding(radio_id);
+    uint8_t out[ZB_MAX_TX];
+    size_t n = zb_encode_captured(radio_id, cf, out, sizeof(out));
+    if (n) transport_usb_write(out, n);
+}
+
+// Re-frame a command and forward it to satellite (target-1) over SPI.
+static void relay_to_satellite(uint8_t target, uint8_t type, const uint8_t *p, uint16_t len)
 {
     if (target < 1 || target > PRI_SAT_COUNT) return;
-    ensure_spi_master();
     uint8_t out[ZB_MAX_TX];
     size_t n = zb_encode(type, p, len, out, sizeof(out));
     if (n) spi_master_send_to(target - 1, out, n);
+}
+
+// CMD_SAT_SET_CHANNEL/CMD_SAT_START/CMD_SAT_STOP arrive as target(1) [+ inner
+// args]; strip the target byte and relay the plain inner command (which a
+// satellite already understands) via relay_to_satellite().
+static void sat_cmd_relay(uint8_t sat_type, const uint8_t *p, uint16_t len)
+{
+    if (len < 1) return;
+    uint8_t target = p[0];
+    uint8_t inner_type;
+    switch (sat_type) {
+    case CMD_SAT_SET_CHANNEL: inner_type = CMD_SET_CHANNEL; break;
+    case CMD_SAT_START:       inner_type = CMD_START; break;
+    case CMD_SAT_STOP:        inner_type = CMD_STOP; break;
+    default: return;
+    }
+    relay_to_satellite(target, inner_type, p + 1, len - 1);
 }
 
 // --- command handling ------------------------------------------------------
@@ -154,6 +199,11 @@ static void handle_command(uint8_t type, const uint8_t *p, uint16_t len)
 {
     switch (type) {
     case CMD_SET_CHANNEL:
+        // This C6's own radio ONLY — does not touch any SPI satellite. A global,
+        // all-radios channel change explicitly relays CMD_SAT_SET_CHANNEL to each
+        // satellite too (see /api/set_channel on the host); this command alone
+        // must stay scoped to the local radio so a per-radio channel-set (e.g.
+        // /api/radio_channel targeting just this C6) doesn't leak to satellites.
         if (len >= 1) {
             radio_lock();
             radio_capture_set_channel(p[0]);
@@ -206,10 +256,12 @@ static void handle_command(uint8_t type, const uint8_t *p, uint16_t len)
         }
         send_ack(type, 0);
         break;
-    case CMD_SET_RADIO_ID:
-        if (len >= 1) { s_cfg.radio_id = p[0]; config_save(&s_cfg); }
-        send_ack(type, 0);
-        break;
+    // No CMD_SET_RADIO_ID here, deliberately: this C6's own radio_id is fixed
+    // at 0 (see app_main()) — the whole SPI-satellite addressing scheme
+    // depends on primary=0, satellite=slot+1 (see spi_master.c) never
+    // drifting, and this command used to let it drift, colliding with a
+    // satellite and making both id-based lookups ambiguous. Falls through to
+    // "unknown command" below.
     case CMD_PROBE:
         if (len >= 4) {
             uint16_t target = (uint16_t)p[0] | (p[1] << 8);
@@ -253,7 +305,7 @@ static void handle_command(uint8_t type, const uint8_t *p, uint16_t len)
                 ota_begin(total, crc);
                 send_ota_status(target);
             } else {
-                ota_relay(target, type, p, len); // forward to a satellite over SPI
+                relay_to_satellite(target, type, p, len); // forward to a satellite over SPI
             }
         }
         break;
@@ -261,22 +313,27 @@ static void handle_command(uint8_t type, const uint8_t *p, uint16_t len)
         if (len >= 5) {
             uint8_t target = p[0];
             if (target == 0) { ota_write(&p[5], len - 5); send_ota_status(target); }
-            else ota_relay(target, type, p, len);
+            else relay_to_satellite(target, type, p, len);
         }
         break;
     case CMD_OTA_END:
         if (len >= 1) {
             uint8_t target = p[0];
             if (target == 0) { if (ota_end() == ESP_OK) s_reboot_pending = true; send_ota_status(target); }
-            else ota_relay(target, type, p, len);
+            else relay_to_satellite(target, type, p, len);
         }
         break;
     case CMD_OTA_ABORT:
         if (len >= 1) {
             uint8_t target = p[0];
             if (target == 0) { ota_abort(); send_ota_status(target); }
-            else ota_relay(target, type, p, len);
+            else relay_to_satellite(target, type, p, len);
         }
+        break;
+    case CMD_SAT_SET_CHANNEL:
+    case CMD_SAT_START:
+    case CMD_SAT_STOP:
+        sat_cmd_relay(type, p, len);
         break;
     case CMD_GET_STATUS:
         send_status();
@@ -308,6 +365,9 @@ void app_main(void)
 {
     s_boot_us = esp_timer_get_time();
     config_load(&s_cfg);
+    // Fixed at 0, always — see the CMD_SET_RADIO_ID removal note above. Forced
+    // here too in case NVS holds a stale non-zero value from before that fix.
+    if (s_cfg.radio_id != 0) { s_cfg.radio_id = 0; config_save(&s_cfg); }
     s_mode = s_cfg.mode;
     s_hop_mask = s_cfg.hop_mask;
     s_hop_dwell_ms = s_cfg.hop_dwell_ms;
@@ -316,6 +376,18 @@ void app_main(void)
     radio_capture_init(s_cfg.channel, s_cfg.radio_id);
     radio_capture_start();
     probe_init(probe_cb);
+
+    // SPI satellites are optional here (unlike standalone, which requires one) —
+    // if none are wired, DATA_READY just never goes high and this costs a quiet
+    // poll loop. Always up so satellite captures/status/OTA merge in from boot.
+    // Deliberately no spi_master_set_channel() push here: each satellite keeps
+    // its own independently-persisted channel (see config_save in
+    // satellite/app_main.c) across a primary reboot/reconnect. Pushing this
+    // C6's own saved channel to every satellite here used to silently stomp
+    // whatever channel each one had actually been set to — the exact bug where
+    // every radio comes back up on the primary's last channel after a restart.
+    spi_master_init(satellite_frame_cb);
+    spi_master_set_msg_cb(msg_from_sat);
 
     ESP_LOGI(TAG, "usb-sniffer up: ch=%u radio=%u", s_cfg.channel, s_cfg.radio_id);
     send_log("zigbee-sniffer usb-sniffer ready");

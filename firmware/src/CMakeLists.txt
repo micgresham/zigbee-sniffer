@@ -22,6 +22,8 @@ idf_component_register(
         "standalone/web_assets/web_assets.c"
         "satellite/app_main.c"
         "satellite/transport_spi.c"
+        "satellite/led.c"
+        "satellite/led_encoder.c"
     INCLUDE_DIRS
         "core"
         "."

@@ -33,6 +33,9 @@ void spi_master_set_channel(uint8_t channel);
 
 // Send a fully-framed message to one satellite (0..PRI_SAT_COUNT-1) — used to
 // relay OTA chunks. `data` must fit one transaction (≤ ~250 bytes framed).
+// Slot N == radio_id N+1: radio_id is fixed by physical wiring slot (see
+// poll_task() in spi_master.c), never satellite- or user-assigned, so this
+// offset is exact — no separate slot lookup needed.
 void spi_master_send_to(int sat, const uint8_t *data, size_t len);
 
 #ifdef __cplusplus

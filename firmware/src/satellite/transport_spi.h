@@ -11,13 +11,15 @@
 extern "C" {
 #endif
 
-// Pin assignments (placeholders; finalised on the carrier — see docs/carrier.md).
+// Pin assignments — verified against the ESP32-C6 SuperMini's actual broken-out
+// GPIOs (0-9, 12-23; GPIO10/11 are NOT brought out to a pad on this board and
+// must not be used). See docs/carrier.md.
 #define SAT_PIN_SCK        6
 #define SAT_PIN_MOSI       7
 #define SAT_PIN_MISO       2
-#define SAT_PIN_CS        10
+#define SAT_PIN_CS         4
 #define SAT_PIN_DATA_READY 3
-#define SAT_PIN_SYNC      11
+#define SAT_PIN_SYNC       5
 #define SAT_SPI_XFER       256   // fixed transaction size, bytes
 
 // Command bytes from the primary are de-framed and delivered here.
