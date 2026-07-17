@@ -13,6 +13,11 @@ full tour see the **[User Guide](user-guide.md)**.
 - *(Optional but recommended)* a **ZHA backup** from Home Assistant — it carries your network
   **channel, PAN id, network key, and device names** so everything auto-configures.
 
+> **No hardware yet?** Skip straight to `./zbsniff --demo` (step 3) — a fully simulated network
+> (a home mesh, a Philips Hue network, and a foreign neighbor network on another channel) lets you
+> explore every tab with no C6 required. A **DEMO MODE** badge stays visible the whole time so it's
+> never mistaken for a real capture.
+
 ---
 
 ## 1 · Flash the firmware onto the C6
@@ -40,6 +45,11 @@ No backup? Point it at your network manually:
 ```
 zbsniff **auto-detects** the C6's USB port. It also **remembers** your settings in `zbsniff.yaml`
 (secrets encrypted), so next time just run `./zbsniff`.
+
+No C6 at all? Run `./zbsniff --demo` instead — no port, backup, or key needed. The same thing
+happens automatically (after asking first) if zbsniff can't find a C6 within a few seconds; a
+banner offers **Retry** or **Enter Demo Mode**, so a slow-to-enumerate real device is never
+silently mistaken for "no hardware."
 
 ## 4 · Open the dashboard
 Browse to **http://localhost:8080**. Within a few seconds you should see:
@@ -72,7 +82,8 @@ from a radio placed near the device.
 ---
 
 ## If you see "host up — no device data"
-Open **Diagnostics → Connection & logs**:
+If a **no hardware found** banner offers Retry/Demo Mode instead, your C6 just hasn't enumerated
+yet — try **Retry** first. Otherwise, open **Diagnostics → Connection & logs**:
 - **0 bytes** → wrong USB connector (use the native-USB port), or another `zbsniff` is holding the
   port. Hit **↻ Reconnect**.
 - **bytes but 0 frames** → firmware/protocol mismatch — reflash (step 1).

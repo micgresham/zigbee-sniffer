@@ -40,3 +40,8 @@ ED tells you a channel is *busy*, not *who* is on it. The **Zigbee networks** pa
 tab identifies the actual networks (by PAN id) sharing the band, and a survey/active scan finds
 those on other channels. A raised noise floor **plus** a foreign PAN on your channel is a strong
 interference signal. See [networks.md](networks.md).
+
+The **Channel airtime** panel closes the loop with decoded-frame evidence: frames/min stacked by
+PAN plus a per-PAN RSSI histogram, over up to 24 h. It catches the case ED and channel-lists both
+miss — a busy network on a *different* channel that is physically close enough (loud RSSI) to
+desense your coordinator's receiver. Details in [networks.md](networks.md).

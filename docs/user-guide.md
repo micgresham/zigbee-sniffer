@@ -7,6 +7,7 @@ The complete guide to the **Zigbee Sniffer & Diagnostics** web interface. New he
 - [What it is](#what-it-is)
 - [The interface at a glance](#the-interface-at-a-glance)
 - [The top bar](#the-top-bar)
+- [Demo mode](#demo-mode)
 - [Overview tab](#overview-tab)
 - [Live frames tab](#live-frames-tab)
 - [RF spectrum tab](#rf-spectrum-tab)
@@ -56,6 +57,41 @@ Always visible, on every tab:
 | **● capturing · ch N** (green, pulsing) | the radio is actively sniffing. Amber "capture mode · no new frames" = quiet or stalled; "◐ ED sweep" = spectrum scanning; "■ idle/stopped". |
 | **ch · captured · dropped · devices** | live counters. `captured` should climb steadily on an active network. |
 | **decrypting** | the network key is loaded and payloads are being decoded. |
+
+---
+
+## Demo mode
+
+No C6 handy? `./zbsniff --demo` runs the exact same dashboard against a fully simulated network —
+useful for exploring the UI, taking screenshots, or a walkthrough with no hardware in the room.
+
+It activates two ways:
+- **`--demo` on the command line** — starts in demo mode immediately.
+- **Automatically offered** if zbsniff can't find a C6 within a few seconds — a banner offers
+  **Retry** (keep searching for real hardware) or **Enter Demo Mode**, with a confirmation before
+  switching. It never silently substitutes simulated data for a real device that's just slow to
+  enumerate.
+
+A purple **DEMO MODE — simulated data** badge stays in the top bar the entire time, so simulated
+and real captures are never mistaken for one another.
+
+What's simulated:
+- A **13-device home mesh** (coordinator, routers, and end devices spread across rooms) generating
+  realistic sensor reports and the occasional coordinator→device command, decrypted through the
+  same crypto pipeline real traffic uses.
+- A **Philips Hue network** (a bridge + 3 bulbs) as a foreign network, plus a **second foreign
+  network** on a different channel — both populate the Networks tab and foreign-device list the
+  same way a real neighboring network would.
+- **Home Assistant and Hue integration data** — friendly names and device counts, consistent across
+  refreshes rather than randomized each time.
+- **RF spectrum** — `Scan once` and `Continuous` both work, with a realistic bursty energy pattern
+  (channels under the simulated networks read hot only some of the time, like real intermittent
+  Zigbee traffic, against a quiet noise floor elsewhere). Starting a continuous sweep takes over a
+  radio exactly like it would on real hardware — that radio stops "capturing" for the duration.
+
+Device identities, PANs, and channels stay stable for the life of the process — only traffic counts
+and RF readings vary — so it behaves like a consistent physical layout rather than re-randomizing on
+every page load.
 
 ---
 
@@ -154,6 +190,26 @@ Because one radio hears only one channel, use a survey to see the rest of the ba
 
 A survey briefly **pauses capture** (~30 s) on a single radio, then restores your channel. Full
 detail: [networks.md](networks.md).
+
+### Channel airtime panel
+
+Below the networks table, **Channel airtime** answers the question the table can't: not just *who*
+is on the air, but **how much and how loudly**. A loud neighbouring network physically close to
+your coordinator can break your network **without ever touching your channel** (receiver
+blocking/desense) — this panel makes that visible instead of "unplug things until it works".
+
+- **Stacked bars** — frames per minute over a selectable window (**15m / 1h / 6h / 24h**), one
+  colour per network. Your PAN is always blue; foreign PANs keep a stable colour; grey collects
+  PAN-less frames (MAC ACKs). Hover a segment for the exact count and time slice.
+- **Per-channel totals** — which channels actually carried traffic in the window.
+- **Per-network rows** — total frames, ~frames/min, average RSSI ⌖, and an **RSSI histogram**
+  (8 bins, ≤−101 to ≥−40 dBm). A neighbour piling up frames at the loud end of the histogram is
+  *close* to your sniffer — if the sniffer sits near your coordinator, that's a prime suspect for
+  otherwise-unexplained `NWK_NO_ROUTE` storms, pairing failures, and mesh-wide dropouts.
+
+Rates and RSSI carry the usual **heard-at-sniffer caveat ⌖**: a network on another channel is only
+sampled while a radio is actually listening there (a hopper, a survey, or a dedicated
+monitor/satellite radio — see [multi-radio.md](multi-radio.md)).
 
 ---
 
@@ -295,8 +351,15 @@ Update the C6 over USB serial — no esptool needed. **Config → Firmware updat
 
 The device writes its inactive OTA slot, verifies, and reboots into it; the bootloader rolls back if
 an image is bad, and **USB reflashing is always the fallback**. The very first flash (step 1 of the
-quickstart) must be over USB because it installs the OTA partition table. Satellite OTA (over SPI) is
-implemented but needs carrier hardware — see [ota.md](ota.md).
+quickstart) must be over USB because it installs the OTA partition table.
+
+**Satellite OTA (over SPI)** works the same way — pick the satellite as the target and the tethered
+C6 relays each chunk over the carrier's SPI link. The satellite briefly pauses capture during the
+transfer and resumes it automatically once done. SPI is a lossier link than USB serial, so a
+transfer can involve many chunk retries — the satellite tracks each chunk's byte offset and skips
+any that already landed, so a resent chunk (from a lost acknowledgment, not lost data) can never be
+double-applied and corrupt the image. Validated end-to-end on carrier hardware, including transfers
+with heavy retry activity throughout. See [ota.md](ota.md) for the wire-level design.
 
 ---
 
@@ -343,6 +406,7 @@ zbsniff [flags]
   --http-port <n>     web UI port (default 8080)
   --config <path>     settings file (default zbsniff.yaml; secrets encrypted)
   --baud <n>          serial baud (default 921600; USB-CDC ignores it)
+  --demo              start in demo mode with a simulated network (no hardware needed)
 ```
 
 See also: [Quickstart](quickstart.md) · [HA add-on](deployment-addon.md) · [OTA](ota.md) ·

@@ -39,6 +39,16 @@ Foreign PANs start as bare hex ids, but the host puts a name to them:
   (bridge)"** even if no Hue device's address was caught. See [ha-integration.md](ha-integration.md).
   Home Assistant/ZHA names your own network the same way.
 
+- **By protocol shape — Thread/Matter, no setup.** Thread (what nearly all Matter devices run over)
+  shares the same 802.15.4 MAC layer as Zigbee but uses 6LoWPAN/IPv6 framing above it instead of
+  Zigbee's NWK layer. A payload that fails the Zigbee NWK version check is checked against known
+  6LoWPAN dispatch patterns (RFC 4944/6282 — IPHC, uncompressed IPv6, mesh headers, fragmentation);
+  a match labels that PAN **"Thread network (likely Matter)"**. This can't confirm the traffic is
+  specifically Matter (vs. plain Thread/OpenThread) without that network's key — the same limit as
+  any other foreign, encrypted network — but the MAC layer alone is enough to tell it apart from
+  Zigbee. See [`tether/internal/decode/layers.go`](../tether/internal/decode/layers.go)
+  (`isSixLowPANDispatch`).
+
 > **Single-radio caveat for Hue *device* names:** a Hue bridge usually runs on a *different channel*
 > than your ZHA network. With one radio pinned to your channel you can identify the Hue *network*
 > (above) but won't hear individual Hue devices, so their names won't appear in Devices. Use
@@ -102,6 +112,27 @@ traffic, even a silent neighbour shows up.
 - Needs firmware **≥ 0.26**. Against older firmware the beacon command is ignored and the scan
   degrades to a passive survey.
 
+## Channel airtime — how loud is each network?
+
+The networks table says *who* is out there; the **Channel airtime** panel below it says **how much
+air they use and how loudly**. It rolls every captured frame into a per-minute count per
+(PAN, channel), plus an 8-bin RSSI histogram per PAN, kept for 48 h:
+
+- **frames/min by network** over 15m / 1h / 6h / 24h, stacked so the busiest PANs are obvious;
+- **per-channel totals** for the window;
+- **avg RSSI + histogram per PAN** — the "loudness" axis. High frame rate *and* an RSSI
+  distribution piled at the strong end means a busy transmitter physically close to the sniffer.
+
+Why this matters: a strong transmitter near your coordinator degrades its radio **regardless of
+channel** (front-end blocking) — e.g. a Hue bridge on channel 25 sitting next to a coordinator on
+channel 20 can cause network-wide `NWK_NO_ROUTE` failures and blocked pairing while looking
+"innocent" in a channel-only view. The airtime panel shows that neighbour as a fat colour band
+with a loud histogram.
+
+Data comes from whatever the radios capture, so the heard-at-sniffer caveat applies: a foreign
+network on another channel accumulates airtime only while some radio listens there (hopping,
+surveys, or a dedicated monitor/satellite radio). API: `GET /api/airtime?window=<seconds>`.
+
 ## Using it
 
 1. Open the **RF spectrum** tab → **Zigbee networks** panel.
@@ -111,6 +142,9 @@ traffic, even a silent neighbour shows up.
    *yours*; everything else is a neighbour.
 4. If a foreign PAN shows up **on your channel**, consider moving your network to a quieter
    channel (see the [channel advisor](spectrum.md) and [channels reference](channels-reference.md)).
+5. Check **Channel airtime** for any foreign PAN that is both busy and loud (strong-end RSSI
+   histogram) — if your sniffer sits near the coordinator, that's a physical-proximity
+   interference suspect even when it's on a *different* channel.
 
 ## Related
 

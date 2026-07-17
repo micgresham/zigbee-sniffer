@@ -8,6 +8,9 @@
 Hosts **1× ESP32-C6-DevKitC-1 primary + up to 3× ESP32-C6 SuperMini satellites** and supports
 both connection modes on one board.
 
+For exact point-to-point wiring between a tethered C6 and satellites, see
+[tethered-to-satellite-wiring.md](tethered-to-satellite-wiring.md).
+
 ## Mode 1 — USB-hub carrier (host mode)
 
 - Onboard **4-port USB-2.0 hub IC** (e.g. FE1.1s) with one **USB-C uplink** to the HA/host box.

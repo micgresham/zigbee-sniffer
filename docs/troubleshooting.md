@@ -51,6 +51,30 @@ USB cable/port or a powered hub — the native-USB port is sensitive to marginal
 Note: when the sniffer briefly goes deaf like this, it is *not* a device dropout, so the incident
 detector deliberately **suppresses** the "silence" flood it would otherwise log for every device.
 
+## Satellite crash-loops at boot: "Detected size(4096k) smaller than ... image header(8192k)"
+
+```
+E spi_flash: Detected size(4096k) smaller than the size in the binary image header(8192k). Probe failed.
+assert failed: __esp_system_init_fn_init_flash startup_funcs.c:95 (flash_ret == ESP_OK)
+```
+
+The flashed image declares **8 MB** flash (the primary DevKitC-1's size) but the satellite chip
+(ESP32-C6 SuperMini, ESP32-C6FH4) only has **4 MB**. Fixed in firmware ≥ 0.29 — reflash the
+satellite with a current build (`pio run -e satellite -t upload`) and this goes away. See
+[firmware.md](firmware.md#platformio-sdkconfig-pitfalls-important) for the root cause (PlatformIO
+bakes the image-header flash size from `board_upload.flash_size`, independent of any sdkconfig
+setting — it is not "auto-detected" at flash time as an earlier version of these docs claimed).
+
+## Satellite wiring: GPIO10/GPIO11 have no pad on common "SuperMini" boards
+
+If you wired the satellite's CS/SYNC to GPIO10/GPIO11 per an older version of
+[the wiring diagram](tethered-to-satellite-wiring.md) and can't find a pad for them — you're not
+missing anything. On the common ESP32-C6 SuperMini (e.g. MakerGO), **GPIO10 and GPIO11 are not
+broken out at all** (only GPIO0–9 and GPIO12–23 have pads). Firmware ≥ 0.29 moved satellite
+CS/SYNC to **GPIO4/GPIO5**, which are confirmed broken out — reflash and rewire to the current
+diagram. If your specific board variant differs, check its silkscreen and update
+`firmware/src/satellite/transport_spi.h` to match.
+
 ## No frames captured
 
 1. **Wrong channel.** Pin to your HA channel (`--channel`); find it in ZHA Network settings or
@@ -83,6 +107,24 @@ Prefer `usb-sniffer` for high-fidelity capture; consider a [satellite radio](mul
 
 Expected — WiFi and 802.15.4 share the antenna in standalone mode. See the coexistence note in
 [hardware.md](hardware.md). Use USB/host mode for the most complete capture.
+
+## Network-wide dropouts / nothing will pair — check for a loud neighbour
+
+If the *whole* Zigbee network degrades at once (outbound commands fail with `NWK_NO_ROUTE`,
+devices unreachable, pairing associates but never completes) while inbound reports still trickle
+in, suspect a **strong nearby transmitter** before debugging individual devices — another Zigbee
+hub (Hue bridge), a Thread border router, or a busy 2.4 GHz source physically close to your
+coordinator. It does **not** have to share your channel: at short range it blocks the
+coordinator's receiver regardless (front-end desense).
+
+1. Open **RF spectrum → Channel airtime**. A foreign PAN with a high frame rate *and* an RSSI
+   histogram piled at the loud end (≥ −60 dBm at a sniffer placed near the coordinator) is your
+   suspect.
+2. Confirm by separation: move the suspect hub (or your coordinator) a few metres and watch the
+   failure stop. Unplugging the suspect is the blunt version of the same test.
+3. Keep them apart permanently, put the other hub on a distant channel anyway
+   ([channels-reference.md](channels-reference.md)), and get the coordinator off USB3 ports onto
+   a short USB 2.0 extension.
 
 ## Host tests
 

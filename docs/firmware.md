@@ -64,20 +64,41 @@ See [troubleshooting.md](troubleshooting.md).
 
 ## PlatformIO sdkconfig pitfalls (important)
 
-Two non-obvious things that will bite you:
-
 1. **Don't name a defaults file `sdkconfig.<envname>`.** PlatformIO *generates* a file with
    exactly that name per environment and will clobber your hand-written one. Per-env overrides
-   live in [`sdkconfigs/<env>.defaults`](../firmware/sdkconfigs/) and are referenced via
-   `board_build.sdkconfig_defaults`. The generated `sdkconfig.<env>` files are gitignored.
-2. **PlatformIO's secondary `sdkconfig_defaults` file is unreliable for *component* options**
-   (e.g. `CONFIG_HTTPD_WS_SUPPORT`). Console/system options applied from it, but component ones
-   silently didn't. Put anything that must stick (WS support, flash size) in the shared
-   **`sdkconfig.defaults`**, which is applied reliably.
-3. **Flash size must match the board + partition extent.** The DevKitC-1 is 8 MB; a 2 MB setting
-   with a ~4 MB partition table both errors config generation *and* makes the SPIFFS partition
-   invalid at runtime. `sdkconfig.defaults` pins `CONFIG_ESPTOOLPY_FLASHSIZE_8MB` (a 4 MB
-   SuperMini still flashes — esptool auto-detects the real size).
+   live in [`sdkconfigs/<env>.defaults`](../firmware/sdkconfigs/). The generated `sdkconfig.<env>`
+   files are gitignored.
+
+2. **`board_build.sdkconfig_defaults` does nothing in this PlatformIO/ESP-IDF integration.**
+   (Verified 2026-07: the key appears nowhere in `espidf.py`, and the three generated
+   `sdkconfig.<env>` files were byte-for-byte identical despite each `sdkconfigs/<env>.defaults`
+   intending real per-env differences.) A previous version of this doc claimed it worked for
+   "console/system options" but not "component options" — that was wrong; it silently applied to
+   **none** of them. The setting that actually works is ESP-IDF's own `SDKCONFIG_DEFAULTS` CMake
+   variable, reachable via the *documented, verified-working* hook:
+   ```ini
+   board_build.cmake_extra_args = -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfigs/<env>.defaults"
+   ```
+   `sdkconfig.defaults` (shared) then `sdkconfigs/<env>.defaults` (per-env) are merged in order,
+   later files winning — confirmed by diffing the three generated sdkconfigs, which now actually
+   differ (flash size, console routing).
+
+3. **Flash size: two independent settings must both be right, and neither is "auto."** The image
+   **header's** flash-size field — the one the bootloader's boot-time probe checks against the
+   real chip — comes from `board.upload.flash_size` (ini: `board_upload.flash_size`, read by
+   `elf2image` in `main.py`), **not** from any sdkconfig value. `CONFIG_ESPTOOLPY_FLASHSIZE` (from
+   sdkconfig, fixed via #2 above) only affects the *app's own* runtime view. A previous version of
+   this doc claimed "esptool auto-detects the real size" — that's false for this field; whatever
+   `board_upload.flash_size` says gets baked in at build time, unconditionally. Get it wrong (e.g.
+   the shared 8 MB default leaking onto a 4 MB SuperMini satellite) and the bootloader crash-loops:
+   ```
+   E spi_flash: Detected size(4096k) smaller than the size in the binary image header(8192k). Probe failed.
+   assert failed: __esp_system_init_fn_init_flash ... (flash_ret == ESP_OK)
+   ```
+   `[env:satellite]` in `platformio.ini` sets `board_upload.flash_size = 4MB` (image header) *and*
+   `sdkconfigs/satellite.defaults` sets `CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y` (app view, via #2) —
+   both are needed; verify with `python3 -c` reading byte 3 of `firmware.bin`/`bootloader.bin`
+   (bits 4-7: 0=1MB 1=2MB 2=4MB 3=8MB 4=16MB), not just the sdkconfig.
 
 ## Console routing per build
 

@@ -62,6 +62,9 @@ mutex. Two things keep it fast under long runs:
   which (behind the single mutex) starves ingest and freezes the UI.
 - **Retention:** `ed_samples` is capped (~60k rows) with an amortized prune plus a one-time trim on
   open, so a continuous sweep can't grow it without bound.
+- **Pre-aggregation:** the Channel-airtime view reads `pan_minutes` — a per-minute rollup
+  (frames + RSSI histogram per PAN/channel, 48 h retention) written inline at ingest — precisely
+  so it never scans the `packets` table. Heavy ad-hoc queries there are what starve ingest.
 
 ### Config
 

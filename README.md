@@ -26,7 +26,9 @@ The firmware ships as **three PlatformIO build profiles** sharing one capture co
 A **single-binary Go host** ([`tether/`](tether/)) plugs a USB C6 dongle into your PC/HA box and
 serves the whole diagnostic web UI (embedded, no runtime deps): live decode + optional decryption,
 SQLite history, routing tree, RF spectrum, neighbouring-network discovery (identified by
-manufacturer OUI + optional **Philips Hue** / Home Assistant name integrations), **automatic
+manufacturer OUI + optional **Philips Hue** / Home Assistant name integrations), **per-network
+channel-airtime analysis** (frames/min by PAN + RSSI histograms — finds the loud neighbour that
+breaks your mesh from a *different* channel), **automatic
 silence/recovery incident logging**, and CSV/JSON export. (A legacy
 **Python / FastAPI** host under [`host/`](host/) still provides the pcap/CLI tools and the HA
 add-on payload.) The host self-heals the serial link and encrypts secrets (network key, HA token)

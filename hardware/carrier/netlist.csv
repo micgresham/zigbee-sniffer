@@ -8,15 +8,15 @@ SPI_MOSI,U_PRI,GPIO7,U_SAT3,GPIO7,
 SPI_MISO,U_PRI,GPIO2,U_SAT1,GPIO2,shared slave-out (only selected sat drives)
 SPI_MISO,U_PRI,GPIO2,U_SAT2,GPIO2,
 SPI_MISO,U_PRI,GPIO2,U_SAT3,GPIO2,
-CS_SAT1,U_PRI,GPIO10,U_SAT1,GPIO10,chip select satellite 1
-CS_SAT2,U_PRI,GPIO18,U_SAT2,GPIO10,chip select satellite 2
-CS_SAT3,U_PRI,GPIO19,U_SAT3,GPIO10,chip select satellite 3
+CS_SAT1,U_PRI,GPIO10,U_SAT1,GPIO4,chip select satellite 1
+CS_SAT2,U_PRI,GPIO18,U_SAT2,GPIO4,chip select satellite 2
+CS_SAT3,U_PRI,GPIO19,U_SAT3,GPIO4,chip select satellite 3
 DREADY_SAT1,U_SAT1,GPIO3,U_PRI,GPIO20,data-ready satellite 1 (sat->primary)
 DREADY_SAT2,U_SAT2,GPIO3,U_PRI,GPIO21,data-ready satellite 2
 DREADY_SAT3,U_SAT3,GPIO3,U_PRI,GPIO22,data-ready satellite 3
-SYNC,U_PRI,GPIO23,U_SAT1,GPIO11,timestamp-sync pulse (primary->all)
-SYNC,U_PRI,GPIO23,U_SAT2,GPIO11,
-SYNC,U_PRI,GPIO23,U_SAT3,GPIO11,
+SYNC,U_PRI,GPIO23,U_SAT1,GPIO5,timestamp-sync pulse (primary->all)
+SYNC,U_PRI,GPIO23,U_SAT2,GPIO5,
+SYNC,U_PRI,GPIO23,U_SAT3,GPIO5,
 PWR_5V,J_PWR,5V,U_PRI,5V,shared 5V rail via power-select
 PWR_5V,J_PWR,5V,U_SAT1,5V,
 PWR_5V,J_PWR,5V,U_SAT2,5V,

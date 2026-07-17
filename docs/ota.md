@@ -1,9 +1,8 @@
 # Firmware OTA update (design)
 
 Goal: update firmware **without USB reflashing** — for the tethered C6 over its serial link, and
-for **satellite units over SPI** (they have no easy USB access on a carrier board). This is a
-**staged design**; the wire protocol, host pipeline, and UI are the first implementation targets,
-followed by the on-device `esp_ota` write paths (which require on-hardware validation).
+for **satellite units over SPI** (they have no easy USB access on a carrier board). Both paths are
+implemented and validated on hardware — see [Status / staging](#status--staging) below.
 
 ## Why OTA
 - The tethered C6 *can* be reflashed over USB, but OTA is convenient and consistent.
@@ -67,7 +66,8 @@ Chunks are acked implicitly by periodic `MSG_OTA_STATUS` (received/total → pro
 2. The tethered C6 **does not** write its own flash; it **relays** each chunk to satellite `id`
    over the existing SPI transport (a new `SPI_OTA_*` opcode), and forwards the satellite's status
    back as `MSG_OTA_STATUS`.
-3. The satellite runs the same `esp_ota_*` sequence and reboots; the master re-syncs it.
+3. The satellite writes the raw partition directly (offset-deduped, incrementally erased — see
+   status below), verifies once, and reboots; the master re-syncs it.
 
 ## Host pipeline (implemented first)
 - `POST /api/ota?target=<0..3>` with the `.bin` body → chunk over serial (≤512 B), emit progress
@@ -87,13 +87,19 @@ Chunks are acked implicitly by periodic `MSG_OTA_STATUS` (received/total → pro
 2. **Tethered self-OTA firmware** — ✅ implemented (`core/ota.c` using `esp_ota`, `partitions_ota.csv`
    with two app slots wired into the `tethered` env). **Needs on-hardware validation** — flash once
    over USB with the new OTA partition table, then subsequent updates can go over serial.
-3. **Satellite SPI relay + SPI-OTA receive** — ✅ implemented (compiles), **needs hardware
-   validation**: the tethered firmware lazily brings up an SPI master and relays `target` 1..3 OTA
-   chunks (`ota_relay` → `spi_master_send_to`); the satellite handles `CMD_OTA_*` over SPI
-   (`esp_ota`) and reports `MSG_OTA_STATUS` back up, which the tethered C6 forwards to the host. The
-   host uses 200-byte chunks for satellites so each fits one 256-byte SPI transaction. Requires a
-   carrier wiring the SPI/CS lines (see [carrier.md](carrier.md)) to exercise. The SPI master is
-   only initialised on the first satellite-OTA request, so the normal single-radio path is
-   untouched.
+3. **Satellite SPI relay + SPI-OTA receive** — ✅ implemented and **validated on carrier hardware**,
+   including transfers with heavy chunk-retry activity throughout: the tethered firmware brings up
+   an SPI master and relays `target` 1..3 OTA chunks (`ota_relay` → `spi_master_send_to`). The
+   satellite no longer uses `esp_ota_write()` (its stateful internal write-pointer offered no way to
+   detect a resent chunk, and a lost acknowledgment — not lost data — could silently double-write
+   and corrupt everything after it); it now writes the raw target partition directly
+   (`esp_partition_write`), erasing incrementally per-sector as data arrives rather than the whole
+   image up front (a single multi-second erase was long enough to trip the watchdog on this
+   single-core chip), and verifies the whole image once via `esp_image_verify` right before
+   switching boot partitions. Each `CMD_OTA_DATA` carries its byte offset, and the satellite skips
+   any chunk whose offset is already applied — SPI is lossy enough that most transfers need many
+   resends, and this makes a resend always safe. The host uses 200-byte chunks for satellites so
+   each fits one 256-byte SPI transaction. The SPI master is only initialised on the first
+   satellite-OTA request, so the normal single-radio path is untouched.
 
 > USB reflashing remains the always-available fallback and cannot brick the device.
