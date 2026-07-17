@@ -1103,9 +1103,9 @@ async function showDetail(addr){if(!addr||addr==="—")return;selected=addr;
   const hd=document.getElementById("d-halog-details");
   if(hd)hd.ontoggle=()=>{detailsOpen[addr+':halog']=hd.open;};
   const pb=document.getElementById("d-probe");
-  if(pb)pb.onclick=async()=>{const p=document.getElementById("at-radio")?document.getElementById("at-radio").value:"";
-    if(!p&&!await gateFn("probe"))return;
-    post(`/api/probe?addr=${addr}${p?'&port='+encodeURIComponent(p):''}`).then(()=>setTimeout(()=>showDetail(addr),700));};
+  if(pb)pb.onclick=async()=>{const rid=document.getElementById("at-radio")?document.getElementById("at-radio").value:"";
+    if(!rid&&!await gateFn("probe"))return;
+    post(`/api/probe?addr=${addr}${rid!==""?'&radio='+encodeURIComponent(rid):''}`).then(()=>setTimeout(()=>showDetail(addr),700));};
   const interrogate=async what=>{
     if(!confirm("⚠ This TRANSMITS an encrypted ZDO request onto your live Zigbee network to query this device. It needs firmware ≥ 0.28. Continue?"))return;
     const out=document.getElementById("d-intg-out");out.textContent="sending…";
@@ -1467,7 +1467,7 @@ async function loadActive(){
   const r=await j("/api/radios");
   if(r){atRadios=r.radios||[];
     const sel=document.getElementById("at-radio"),cur=sel.value;
-    sel.innerHTML='<option value="">any radio</option>'+atRadios.map(x=>`<option value="${x.port}">radio ${x.radio_id} · ch${x.channel} · …${x.port.slice(-6)}</option>`).join("");
+    sel.innerHTML='<option value="">any radio</option>'+atRadios.map(x=>`<option value="${x.radio_id}">radio ${x.radio_id} · ch${x.channel} · …${x.port.slice(-6)}</option>`).join("");
     sel.value=cur;
     document.getElementById("at-pan").textContent=r.pan?("PAN "+r.pan):"PAN unknown — load a ZHA backup or pass --pan";
     document.getElementById("at-radios").innerHTML=atRadios.length
@@ -1513,12 +1513,10 @@ async function loadRadios(){const r=await j("/api/radios");if(!r)return;
   if(document.activeElement instanceof HTMLInputElement && radiosTbl.contains(document.activeElement))return;
   radiosTbl.innerHTML=rs.map(x=>{
     const cur=x.role||"any";
-    // Satellite firmware only captures — don't offer roles it can't perform
-    // (the host would otherwise have to refuse them anyway).
-    const opts=x.relayed?roleOpts.filter(o=>!["spectrum","tester","hopper"].includes(o)):roleOpts;
+    // Satellites are full radios (v0.32+): every role works, relayed over SPI.
     const roleCell=x.radio_id<0?'<span class=dim>identifying…</span>'
       :`<select class=rrole data-id="${x.radio_id}">`+
-        opts.map(o=>`<option value="${o}"${cur===o?" selected":""}>${o}</option>`).join("")+`</select>`;
+        roleOpts.map(o=>`<option value="${o}"${cur===o?" selected":""}>${o}</option>`).join("")+`</select>`;
     const chCell=x.radio_id<0?(x.channel<0?'—':x.channel)
       :`<input class=rch type=number min=11 max=26 value="${x.channel<0?'':x.channel}" style="width:40px">`+
         `<button class=chset data-id="${x.radio_id}" style="font-size:10px;padding:1px 6px;margin-left:4px">set</button>`;
@@ -1543,16 +1541,18 @@ document.getElementById("radios-tbl").addEventListener("click",e=>{
   post(`/api/radio_channel?radio=${cb.dataset.id}&ch=${inp.value}`).then(()=>setTimeout(loadRadios,400));});
 on("at-probe",async()=>{const a=document.getElementById("at-addr").value.trim();
   if(!a){alert("Enter a device short address to probe (e.g. 0x1234)");return;}
-  const p=document.getElementById("at-radio").value;
-  const r=(atRadios||[]).find(x=>x.port===p);
+  const rid=document.getElementById("at-radio").value;
+  const r=(atRadios||[]).find(x=>String(x.radio_id)===rid);
   if(r&&r.mode===2&&!confirm("⚠ That radio is running an ED sweep; a probe briefly interrupts it. Continue?"))return;
-  const res=await fetch(`/api/probe?addr=${encodeURIComponent(a)}${p?"&port="+encodeURIComponent(p):""}`,
+  const res=await fetch(`/api/probe?addr=${encodeURIComponent(a)}${rid!==""?"&radio="+encodeURIComponent(rid):""}`,
     {method:"POST"}).then(x=>x.json()).catch(()=>null);
   if(res&&res.sent===false)alert("Probe not sent — no radio available (check the radio selection).");
   setTimeout(loadActive,800);});
 on("at-schedule",()=>{const a=document.getElementById("at-addr").value.trim();
   if(!a){alert("Enter a device short address to schedule (e.g. 0x1234)");return;}
-  const iv=+document.getElementById("at-interval").value||60,p=document.getElementById("at-radio").value;
+  const iv=+document.getElementById("at-interval").value||60,rid=document.getElementById("at-radio").value;
+  // Schedules run on the primary/any radio; map the chosen radio back to its port.
+  const rr=(atRadios||[]).find(x=>String(x.radio_id)===rid),p=rr?rr.port:"";
   post(`/api/schedules?addr=${encodeURIComponent(a)}&interval=${iv}${p?'&port='+encodeURIComponent(p):''}`)
     .then(()=>{loadActive();document.getElementById("at-addr").focus();});});
 document.getElementById("at-sched").onclick=e=>{const b=e.target.closest("[data-delsched]");

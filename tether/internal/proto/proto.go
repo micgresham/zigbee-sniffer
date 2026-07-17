@@ -51,6 +51,7 @@ const (
 	CmdSatSetChannel = 0x91
 	CmdSatStart      = 0x92
 	CmdSatStop       = 0x93
+	CmdSatRelay      = 0x94
 )
 
 // OTA states (MsgOtaStatus.State).
@@ -179,6 +180,14 @@ func CmdOtaAbortMsg(target byte) []byte { return Encode(CmdOtaAbort, []byte{targ
 func CmdSatSetChannelMsg(target, ch byte) []byte { return Encode(CmdSatSetChannel, []byte{target, ch}) }
 func CmdSatStartMsg(target byte) []byte          { return Encode(CmdSatStart, []byte{target}) }
 func CmdSatStopMsg(target byte) []byte           { return Encode(CmdSatStop, []byte{target}) }
+
+// CmdSatRelayMsg wraps a fully-encoded inner command frame so the primary
+// forwards it verbatim over SPI to satellite `target` (1..3). This is how any
+// host->device command (mode, ED, hop, probe, beacon, raw TX) reaches a
+// satellite — see CMD_SAT_RELAY in proto.h.
+func CmdSatRelayMsg(target byte, inner []byte) []byte {
+	return Encode(CmdSatRelay, append([]byte{target}, inner...))
+}
 
 // CmdBeaconReqMsg asks the radio to transmit an 802.15.4 beacon request on the
 // current channel; coordinators/routers reply with a beacon revealing their PAN.

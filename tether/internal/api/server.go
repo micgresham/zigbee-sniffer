@@ -292,11 +292,6 @@ func (s *Server) allocate(fn string) (port string, radioID int, ok, interrupt bo
 		return "any"
 	}
 	dedicated := map[string]string{"spectrum": "spectrum", "capture": "sniffer", "probe": "tester"}[fn]
-	// Satellite firmware is capture-only; ED sweeps and probe TX must land on
-	// a radio the host can actually command to do them (the port's local one).
-	capable := func(r *radios.Radio) bool {
-		return !(r.Relayed && (fn == "spectrum" || fn == "probe"))
-	}
 	capturing := func(r *radios.Radio) bool { return (r.Mode == 1 || r.Mode == 3) && !r.Stopped }
 	conflicts := func(r *radios.Radio) bool {
 		switch fn {
@@ -308,13 +303,13 @@ func (s *Server) allocate(fn string) (port string, radioID int, ok, interrupt bo
 		return false // probes piggyback on capture
 	}
 	for _, r := range list { // 1) dedicated role
-		if roleOf(r.RadioID) == dedicated && capable(r) {
+		if roleOf(r.RadioID) == dedicated {
 			return r.Port, r.RadioID, true, false, ""
 		}
 	}
 	var intr *radios.Radio // 2) an "any" radio (prefer free)
 	for _, r := range list {
-		if roleOf(r.RadioID) == "any" && capable(r) {
+		if roleOf(r.RadioID) == "any" {
 			if !conflicts(r) {
 				return r.Port, r.RadioID, true, false, ""
 			}
@@ -330,7 +325,7 @@ func (s *Server) allocate(fn string) (port string, radioID int, ok, interrupt bo
 	}
 	if fn == "probe" { // 3) piggyback probe on a capturing radio
 		for _, r := range list {
-			if capturing(r) && capable(r) {
+			if capturing(r) {
 				return r.Port, r.RadioID, true, false, ""
 			}
 		}
@@ -363,23 +358,33 @@ func describeInUse(list []*radios.Radio, roleOf func(int) string) string {
 
 // probe dispatches one active MAC probe (pan 0 → use the runtime's PAN).
 // With no explicit port, it prefers a radio assigned the "tester" role.
-func (s *Server) probe(target, pan int, port string) bool {
+func (s *Server) probe(target, pan, radioID int) bool {
 	if s.SendTo == nil {
 		return false
 	}
 	if pan == 0 && s.RT != nil {
 		pan = int(s.RT.Pan())
 	}
-	if port == "" {
-		if p, _, ok, _, _ := s.allocate("probe"); ok {
-			port = p
+	port := ""
+	if radioID < 0 { // auto: prefer a tester-role radio
+		if p, id, ok, _, _ := s.allocate("probe"); ok {
+			port, radioID = p, id
+		}
+	} else if s.Radios != nil {
+		if ports := s.Radios.PortsFor(radioID); len(ports) > 0 {
+			port = ports[0]
 		}
 	}
-	ok := s.SendTo(port, proto.CmdProbeMsg(uint16(target), uint16(pan)))
-	if ok && s.Radios != nil && port != "" {
+	if port == "" {
+		return false
+	}
+	// Route through sendToRadio so a satellite gets the probe over the SPI
+	// relay (tester role), not the primary radio sharing its port.
+	s.sendToRadio(port, radioID, proto.CmdProbeMsg(uint16(target), uint16(pan)))
+	if s.Radios != nil {
 		s.Radios.Probed(port)
 	}
-	return ok
+	return true
 }
 
 // sendFnTo sends frames to a specific port, or broadcasts when port is "".
@@ -399,6 +404,22 @@ func (s *Server) sendFnTo(port string, frames ...[]byte) {
 // setChannelOn pick the CMD_SAT_* wire commands instead when that's the case.
 func (s *Server) relayed(port string, radioID int) bool {
 	return s.Radios != nil && s.Radios.IsRelayed(port, radioID)
+}
+
+// sendToRadio delivers each command frame to one specific radio. For the
+// primary's own local radio it sends to the port directly; for a relayed
+// satellite (which shares the primary's port) it wraps each frame in
+// CmdSatRelay so the primary forwards it over SPI. This is the single path
+// that makes satellites fully symmetric — ED sweeps, hopping, probes, beacons,
+// raw TX all reach a satellite through here.
+func (s *Server) sendToRadio(port string, radioID int, frames ...[]byte) {
+	if s.relayed(port, radioID) {
+		for _, f := range frames {
+			s.SendTo(port, proto.CmdSatRelayMsg(byte(radioID), f))
+		}
+		return
+	}
+	s.sendFnTo(port, frames...)
 }
 
 func (s *Server) startOn(port string, radioID int) {
@@ -452,21 +473,21 @@ func (s *Server) intendedHop() int {
 
 // restoreCapture returns a radio to the configured channel + hop state (pinned
 // if hop is 0) and resumes capturing.
-func (s *Server) restoreCapture(port string) int {
+func (s *Server) restoreCapture(port string, radioID int) int {
 	frames := [][]byte{proto.CmdSetHopMsg(proto.AllChannelsMask(), uint16(s.intendedHop()))}
 	ch := s.intendedChannel()
 	if ch >= int(proto.ChannelMin) && ch <= int(proto.ChannelMax) {
 		frames = append(frames, proto.CmdSetChannelMsg(byte(ch)))
 	}
 	frames = append(frames, proto.CmdSetModeMsg(proto.ModeCapture), proto.CmdStartMsg())
-	s.sendFnTo(port, frames...)
+	s.sendToRadio(port, radioID, frames...)
 	return ch
 }
 
-func (s *Server) runSurvey(port string, dwellMs int, active bool) {
-	s.sendFnTo(port, proto.CmdSetHopMsg(proto.AllChannelsMask(), 0)) // stop hopping while we sweep
+func (s *Server) runSurvey(port string, radioID, dwellMs int, active bool) {
+	s.sendToRadio(port, radioID, proto.CmdSetHopMsg(proto.AllChannelsMask(), 0)) // stop hopping while we sweep
 	for ch := int(proto.ChannelMin); ch <= int(proto.ChannelMax); ch++ {
-		s.sendFnTo(port,
+		s.sendToRadio(port, radioID,
 			proto.CmdSetChannelMsg(byte(ch)),
 			proto.CmdSetModeMsg(proto.ModeCapture),
 			proto.CmdStartMsg())
@@ -475,28 +496,28 @@ func (s *Server) runSurvey(port string, dwellMs int, active bool) {
 			// Let the radio settle on the new channel, then solicit beacons.
 			// Send twice — a single request can be lost on a busy channel.
 			time.Sleep(150 * time.Millisecond)
-			s.sendFnTo(port, proto.CmdBeaconReqMsg())
+			s.sendToRadio(port, radioID, proto.CmdBeaconReqMsg())
 			time.Sleep(200 * time.Millisecond)
-			s.sendFnTo(port, proto.CmdBeaconReqMsg())
+			s.sendToRadio(port, radioID, proto.CmdBeaconReqMsg())
 			time.Sleep(time.Duration(dwellMs) * time.Millisecond)
 		} else {
 			time.Sleep(time.Duration(dwellMs) * time.Millisecond)
 		}
 	}
-	restored := s.restoreCapture(port)
+	restored := s.restoreCapture(port, radioID)
 	s.Hub.Publish(map[string]any{"kind": "survey", "channel": restored, "active": active, "done": true})
 }
 
 // runMonitorSnapshot dwells the given radio on a foreign channel for a while
 // (collecting that network's devices/names), then restores the capture channel.
 // Used on a single radio when no spare is available to monitor continuously.
-func (s *Server) runMonitorSnapshot(port string, ch, dwellMs int) {
+func (s *Server) runMonitorSnapshot(port string, radioID, ch, dwellMs int) {
 	// Pin to the target channel (hop off) for a clean capture during the dwell.
-	s.sendFnTo(port, proto.CmdSetHopMsg(proto.AllChannelsMask(), 0),
+	s.sendToRadio(port, radioID, proto.CmdSetHopMsg(proto.AllChannelsMask(), 0),
 		proto.CmdSetChannelMsg(byte(ch)), proto.CmdSetModeMsg(proto.ModeCapture), proto.CmdStartMsg())
 	s.Hub.Publish(map[string]any{"kind": "monitor", "channel": ch, "done": false})
 	time.Sleep(time.Duration(dwellMs) * time.Millisecond)
-	restored := s.restoreCapture(port) // back to the configured channel + hop state
+	restored := s.restoreCapture(port, radioID) // back to the configured channel + hop state
 	s.Hub.Publish(map[string]any{"kind": "monitor", "channel": restored, "done": true})
 }
 
@@ -966,12 +987,12 @@ func (s *Server) Handler() http.Handler {
 			writeJSON(w, map[string]any{"ok": false, "reason": "failed to build frame"})
 			return
 		}
-		port, _, okA, _, reason := s.allocate("probe")
+		port, radioID, okA, _, reason := s.allocate("probe")
 		if !okA {
 			writeJSON(w, map[string]any{"ok": false, "reason": reason})
 			return
 		}
-		s.sendFnTo(port, proto.CmdTxRawMsg(frame))
+		s.sendToRadio(port, radioID, proto.CmdTxRawMsg(frame))
 		writeJSON(w, map[string]any{"ok": true, "target": fmt.Sprintf("0x%04x", target),
 			"bytes": len(frame)})
 	})
@@ -1487,23 +1508,6 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		role := r.URL.Query().Get("role")
-		// Satellite firmware implements capture only (set channel / start /
-		// stop over the SPI relay) — no ED, no hopping, no TX injection.
-		// Without this check the role sticks in config but the mode command
-		// falls through to the port's LOCAL radio, silently swapping the two
-		// radios' functions (and losing capture on the home channel).
-		if s.Radios != nil {
-			for _, rd := range s.Radios.List() {
-				if rd.RadioID == id && rd.Relayed {
-					switch role {
-					case "spectrum", "tester", "hopper":
-						writeJSON(w, map[string]any{"ok": false, "reason": fmt.Sprintf(
-							"Radio %d is an SPI satellite — satellite firmware only captures (channel/start/stop); it can't run %s. Assign that role to the local radio (id 0).", id, role)})
-						return
-					}
-				}
-			}
-		}
 		if s.SetRole != nil {
 			s.SetRole(id, role)
 		}
@@ -1549,8 +1553,11 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		pan, _ := parseAddr(r.URL.Query().Get("pan")) // 0 if absent → runtime PAN
-		port := r.URL.Query().Get("port")
-		sent := s.probe(addr, pan, port)
+		radioID := -1                                 // -1 = auto (tester role)
+		if v, err := strconv.Atoi(r.URL.Query().Get("radio")); err == nil {
+			radioID = v
+		}
+		sent := s.probe(addr, pan, radioID)
 		writeJSON(w, map[string]any{"sent": sent})
 	})
 	// Watch: flag an address in the device drawer so ingest() pushes a "watch"
@@ -1694,7 +1701,7 @@ func (s *Server) Handler() http.Handler {
 	// Full-band survey: hop every channel briefly to discover networks on all of
 	// them (single radio → pauses capture). Progress goes out on the WebSocket.
 	mux.HandleFunc("/api/survey", func(w http.ResponseWriter, r *http.Request) {
-		port, _, ok, _, reason := s.allocate("spectrum")
+		port, radioID, ok, _, reason := s.allocate("spectrum")
 		if !ok {
 			writeJSON(w, map[string]any{"ok": false, "reason": reason})
 			return
@@ -1704,7 +1711,7 @@ func (s *Server) Handler() http.Handler {
 			dwell = d
 		}
 		active := r.URL.Query().Get("active") == "1"
-		go s.runSurvey(port, dwell, active)
+		go s.runSurvey(port, radioID, dwell, active)
 		writeJSON(w, map[string]any{"ok": true})
 	})
 	// Monitor a foreign network. Target channel = ?channel=, else the paired Hue
@@ -1740,7 +1747,7 @@ func (s *Server) Handler() http.Handler {
 			writeJSON(w, map[string]any{"ok": true, "mode": "radio", "radio": id, "channel": ch, "source": source})
 			return
 		}
-		port, _, ok, _, reason := s.allocate("capture")
+		port, radioID, ok, _, reason := s.allocate("capture")
 		if !ok {
 			writeJSON(w, map[string]any{"ok": false, "reason": reason})
 			return
@@ -1749,7 +1756,7 @@ func (s *Server) Handler() http.Handler {
 		if d, err := strconv.Atoi(r.URL.Query().Get("dwell")); err == nil && d >= 2000 {
 			dwell = d
 		}
-		go s.runMonitorSnapshot(port, ch, dwell)
+		go s.runMonitorSnapshot(port, radioID, ch, dwell)
 		writeJSON(w, map[string]any{"ok": true, "mode": "snapshot", "channel": ch, "source": source, "dwell_ms": dwell})
 	})
 	mux.HandleFunc("/api/set_channel", func(w http.ResponseWriter, r *http.Request) {
@@ -1798,7 +1805,7 @@ func (s *Server) Handler() http.Handler {
 			// top of traffic that's still "running."
 			demo.TriggerScan(radioID, dwell)
 		} else {
-			s.sendFnTo(port, proto.CmdEdScanMsg(proto.AllChannelsMask(), uint16(dwell)))
+			s.sendToRadio(port, radioID, proto.CmdEdScanMsg(proto.AllChannelsMask(), uint16(dwell)))
 		}
 		writeJSON(w, map[string]any{"ok": true, "scanning": true, "dwell": dwell})
 	})
@@ -1861,7 +1868,9 @@ func (s *Server) Handler() http.Handler {
 		if m == proto.ModeCapture {
 			frames = append(frames, proto.CmdStartMsg())
 		}
-		s.sendFnTo(port, frames...)
+		// Route to the allocated radio (may be a satellite) via the relay so a
+		// satellite assigned the spectrum role runs the continuous ED sweep too.
+		s.sendToRadio(port, radioID, frames...)
 		if s.SaveConfig != nil {
 			s.SaveConfig(func(c *config.Config) { c.Mode = m })
 		}

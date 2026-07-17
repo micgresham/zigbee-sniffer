@@ -25,8 +25,10 @@ a **noise-floor profile** over time — this is our spectrum analyzer. It does n
 
 One radio can either capture **or** measure energy at any instant. The `CAPTURE_PLUS_ED` mode
 interleaves them (you miss some frames during ED). A **second radio** removes the tradeoff: pin
-radio A to the HA channel for continuous capture while radio B sweeps. See
-[multi-radio.md](multi-radio.md).
+radio A to the HA channel for continuous capture while radio B sweeps. That second radio can be a
+USB dongle **or an SPI satellite** — as of firmware 0.32 satellites run the ED sweep too (assign
+the `spectrum` role in Config → Radios), so a satellite placed at a problem device's location
+measures the noise floor *there*, not at the sniffer. See [multi-radio.md](multi-radio.md).
 
 ## Interpreting values
 
