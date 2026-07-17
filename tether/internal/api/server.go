@@ -1019,8 +1019,21 @@ func (s *Server) Handler() http.Handler {
 		analysis["findings"] = findings
 		writeJSON(w, analysis)
 	})
+	// Diagnostics runs a dozen-plus analysis queries behind the single DB
+	// mutex; every open tab polls it every 3 s. A short cache bounds that
+	// cost regardless of tab count — findings don't change second-to-second.
+	var dgMu sync.Mutex
+	var dgAt time.Time
+	var dgCached []map[string]any
 	mux.HandleFunc("/api/diagnostics", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, nz(s.DB.Diagnostics(panOf(s.RT))))
+		dgMu.Lock()
+		if time.Since(dgAt) > 10*time.Second {
+			dgCached = nz(s.DB.Diagnostics(panOf(s.RT)))
+			dgAt = time.Now()
+		}
+		out := dgCached
+		dgMu.Unlock()
+		writeJSON(w, out)
 	})
 	mux.HandleFunc("/api/stats", func(w http.ResponseWriter, r *http.Request) {
 		if s.Stats != nil {

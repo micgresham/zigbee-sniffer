@@ -1620,7 +1620,13 @@ on("ota-go",async()=>{const f=document.getElementById("ota-file").files[0];
 
 ws();bindGraphZoom();loadActive();loadFrames();initPrefs();
 j("/api/watch_list").then(r=>{if(r&&r.addrs)watchedAddrs=new Set(r.addrs);});
-setInterval(()=>{loadDevices();loadRouting();loadIncidents();loadSpectrum();loadNetworks();loadAirtime();loadDiagnostics();loadHAStatus();loadHueStatus();loadConn();loadActive();loadRadios();loadDemoStatus();if(selected)showDetail(selected);},3000);
+// The 3s poll skips hidden tabs entirely: browsers throttle background timers
+// and the deferred fetches otherwise fire in a burst on refocus, interleaving
+// stale responses over fresh ones — and a day-old background tab hammers the
+// host's DB mutex for nothing. visibilitychange refreshes immediately instead.
+const pollAll=()=>{loadDevices();loadRouting();loadIncidents();loadSpectrum();loadNetworks();loadAirtime();loadDiagnostics();loadHAStatus();loadHueStatus();loadConn();loadActive();loadRadios();loadDemoStatus();if(selected)showDetail(selected);};
+setInterval(()=>{if(!document.hidden)pollAll();},3000);
+document.addEventListener("visibilitychange",()=>{if(!document.hidden)pollAll();});
 loadDemoStatus();
 on("no-hw-retry",()=>post("/api/demo/retry").then(loadDemoStatus));
 on("no-hw-demo",()=>{if(confirm("Enter demo mode? This populates the dashboard with a simulated network so you can explore it without hardware.\n\nThis stops searching for real hardware for the rest of this session — restart zbsniff to look again."))post("/api/demo/enable").then(loadDemoStatus);});

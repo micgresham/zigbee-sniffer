@@ -107,6 +107,15 @@ CREATE TABLE IF NOT EXISTS schedules(
 // freezes the whole app. We keep only the most recent edCap rows.
 const edCap = 60000
 
+// Caps for the low-rate but previously unbounded tables. Sized to keep weeks
+// of useful history while bounding scan cost; pruned amortized via
+// maintainLocked, same reasoning as edCap.
+const (
+	incidentCap = 5000
+	probeCap    = 20000
+	haLogCap    = 2000
+)
+
 // DB wraps the SQLite connection.
 type DB struct {
 	mu       sync.Mutex
@@ -115,6 +124,8 @@ type DB struct {
 	pktWrites int // counter for periodic packets pruning
 	rflWrites int // counter for periodic route_failure_log pruning
 	pmWrites  int // counter for periodic pan_minutes pruning
+	miscWrites int   // counter for pruning the low-rate tables (incidents/probes/ha_log)
+	lastCkpt   int64 // unix time of the last WAL checkpoint (see maintainLocked)
 }
 
 // Open opens (or creates) the database at path (":memory:" for in-memory).
@@ -144,7 +155,14 @@ func Open(path string) (*DB, error) {
 	// One-time trim: an existing DB may already hold millions of ed_samples from
 	// before the cap existed. Bring it back under edCap so queries are fast now.
 	d.Exec(`DELETE FROM ed_samples WHERE rowid <= (SELECT MAX(rowid) - ? FROM ed_samples)`, edCap)
-	return &DB{db: d}, nil
+	// Same one-time trim for the tables that were unbounded before caps existed
+	// (a long-running install may carry weeks of rows that make every scan slow).
+	d.Exec(`DELETE FROM incidents WHERE id <= (SELECT MAX(id) - ? FROM incidents)`, incidentCap)
+	d.Exec(`DELETE FROM probe_results WHERE id <= (SELECT MAX(id) - ? FROM probe_results)`, probeCap)
+	d.Exec(`DELETE FROM ha_log WHERE key NOT IN (SELECT key FROM ha_log ORDER BY ts DESC LIMIT ?)`, haLogCap)
+	// Reclaim any WAL backlog from a previous long run before serving queries.
+	d.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+	return &DB{db: d, lastCkpt: time.Now().Unix()}, nil
 }
 
 // Reset purges every captured-data table back to empty (packets, devices,
@@ -175,6 +193,25 @@ func hexAddr(a sql.NullInt64) string {
 }
 
 // IngestFrame stores a decoded frame and updates device/link aggregates.
+// maintainLocked runs the maintenance no single table's own amortized prune
+// covers: bounding the low-rate tables and, hourly, truncating the WAL.
+// With the UI polling every few seconds there is nearly always an active
+// reader, so SQLite's passive auto-checkpoint can fail indefinitely — left
+// alone the WAL grows for days and every read slows down with it ("the app
+// gets loopy after a few days"). Caller must hold d.mu.
+func (d *DB) maintainLocked() {
+	if d.miscWrites++; d.miscWrites%512 == 0 {
+		d.db.Exec(`DELETE FROM incidents WHERE id <= (SELECT MAX(id) - ? FROM incidents)`, incidentCap)
+		d.db.Exec(`DELETE FROM probe_results WHERE id <= (SELECT MAX(id) - ? FROM probe_results)`, probeCap)
+		d.db.Exec(`DELETE FROM ha_log WHERE key NOT IN (SELECT key FROM ha_log ORDER BY ts DESC LIMIT ?)`, haLogCap)
+	}
+	if now := time.Now().Unix(); now-d.lastCkpt > 3600 {
+		d.lastCkpt = now
+		d.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+		d.db.Exec(`PRAGMA optimize`)
+	}
+}
+
 func (d *DB) IngestFrame(ts float64, radio, channel int, rssi, lqi int, dec *decode.Decoded, raw []byte) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -237,6 +274,7 @@ func (d *DB) IngestFrame(ts float64, radio, channel int, rssi, lqi int, dec *dec
 	if d.pmWrites++; d.pmWrites%4096 == 0 {
 		d.db.Exec(`DELETE FROM pan_minutes WHERE bucket < ?`, bucket-2880) // keep 48h
 	}
+	d.maintainLocked()
 	// MAC-layer addresses are the physical hop (often router<->coordinator).
 	if src >= 0 && src != broadcast {
 		d.upsertDevice(int(src), ts, rssi, lqi, channel, panInt)
@@ -352,6 +390,7 @@ func (d *DB) IngestIncident(data map[string]any) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.insertIncidentLocked(data)
+	d.maintainLocked()
 }
 
 // insertIncidentLocked writes one incident row. Caller must hold d.mu.
@@ -739,6 +778,7 @@ func (d *DB) IngestHALog(key string, ts, firstSeen float64, level, logger, messa
 	d.db.Exec(`INSERT INTO ha_log(key,ts,first_seen,level,logger,message,exception,count) VALUES(?,?,?,?,?,?,?,?)
 	           ON CONFLICT(key) DO UPDATE SET ts=excluded.ts,count=excluded.count,message=excluded.message`,
 		key, ts, firstSeen, level, logger, message, exception, count)
+	d.maintainLocked()
 }
 
 // HALogsFor returns HA system-log entries whose message mentions any of
@@ -1555,6 +1595,7 @@ func (d *DB) IngestProbe(ts float64, target int, port string, radio int, acked b
 	}
 	d.db.Exec(`INSERT INTO probe_results(ts,target,port,radio,acked,rssi,lqi) VALUES(?,?,?,?,?,?,?)`,
 		ts, target, port, radio, a, rssi, lqi)
+	d.maintainLocked()
 }
 
 // ProbeHistory returns recent probe results, optionally filtered by target (<0 = all).

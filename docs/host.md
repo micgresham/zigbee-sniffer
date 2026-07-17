@@ -65,6 +65,13 @@ mutex. Two things keep it fast under long runs:
 - **Pre-aggregation:** the Channel-airtime view reads `pan_minutes` — a per-minute rollup
   (frames + RSSI histogram per PAN/channel, 48 h retention) written inline at ingest — precisely
   so it never scans the `packets` table. Heavy ad-hoc queries there are what starve ingest.
+- **Long-uptime maintenance** (`maintainLocked`): every table is capped (`incidents`,
+  `probe_results`, `ha_log` included), and the WAL is checkpointed hourly with
+  `wal_checkpoint(TRUNCATE)`. The polling UI keeps a reader open almost continuously, so
+  SQLite's passive auto-checkpoint can fail indefinitely — without the explicit checkpoint the
+  WAL grows for days and every read slows with it (the "app gets sluggish after a few days"
+  failure). `/api/diagnostics` is additionally cached for 10 s server-side, and the web UI
+  pauses its 3 s poll while the tab is hidden.
 
 ### Config
 
