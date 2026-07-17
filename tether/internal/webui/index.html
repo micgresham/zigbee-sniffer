@@ -1513,9 +1513,12 @@ async function loadRadios(){const r=await j("/api/radios");if(!r)return;
   if(document.activeElement instanceof HTMLInputElement && radiosTbl.contains(document.activeElement))return;
   radiosTbl.innerHTML=rs.map(x=>{
     const cur=x.role||"any";
+    // Satellite firmware only captures — don't offer roles it can't perform
+    // (the host would otherwise have to refuse them anyway).
+    const opts=x.relayed?roleOpts.filter(o=>!["spectrum","tester","hopper"].includes(o)):roleOpts;
     const roleCell=x.radio_id<0?'<span class=dim>identifying…</span>'
       :`<select class=rrole data-id="${x.radio_id}">`+
-        roleOpts.map(o=>`<option value="${o}"${cur===o?" selected":""}>${o}</option>`).join("")+`</select>`;
+        opts.map(o=>`<option value="${o}"${cur===o?" selected":""}>${o}</option>`).join("")+`</select>`;
     const chCell=x.radio_id<0?(x.channel<0?'—':x.channel)
       :`<input class=rch type=number min=11 max=26 value="${x.channel<0?'':x.channel}" style="width:40px">`+
         `<button class=chset data-id="${x.radio_id}" style="font-size:10px;padding:1px 6px;margin-left:4px">set</button>`;
@@ -1523,7 +1526,7 @@ async function loadRadios(){const r=await j("/api/radios");if(!r)return;
     // (locked in firmware), 1..3 = a relayed satellite's physical SPI slot.
     const idCell=x.radio_id<0?'?':x.radio_id;
     const fwCell=x.radio_id<0?'—':(radioStatus[x.radio_id]?.fw||'<span class=dim>?</span>');
-    return `<tr><td class=mono title="${x.port}">…${x.port.slice(-12)}</td>`+
+    return `<tr><td class=mono title="${x.relayed?x.port+' — SPI satellite relayed through the local radio\'s port':x.port}">…${x.port.slice(-12)}${x.relayed?' <span class=tag title="SPI satellite — capture only">sat</span>':''}</td>`+
       `<td>${idCell}</td>`+
       `<td>${roleCell}</td><td>${chCell}</td><td class=mono>${fwCell}</td><td>${x.frames}</td><td>${x.probes}</td>`+
       `<td class=dim>${x.last_seen?ageStr(x.last_seen):''}</td></tr>`;}).join("")
@@ -1531,7 +1534,9 @@ async function loadRadios(){const r=await j("/api/radios");if(!r)return;
 }
 document.getElementById("radios-tbl").addEventListener("change",e=>{
   const s=e.target.closest("select.rrole");
-  if(s)post(`/api/radio_role?radio=${s.dataset.id}&role=${s.value}`).then(()=>setTimeout(loadRadios,400));});
+  if(s)postJ(`/api/radio_role?radio=${s.dataset.id}&role=${s.value}`).then(r=>{
+    if(r&&r.ok===false)alert(r.reason||"role not allowed for this radio");
+    setTimeout(loadRadios,400);});});
 document.getElementById("radios-tbl").addEventListener("click",e=>{
   const cb=e.target.closest("button.chset");if(!cb)return;
   const inp=cb.parentElement.querySelector("input.rch");

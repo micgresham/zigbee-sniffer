@@ -292,6 +292,11 @@ func (s *Server) allocate(fn string) (port string, radioID int, ok, interrupt bo
 		return "any"
 	}
 	dedicated := map[string]string{"spectrum": "spectrum", "capture": "sniffer", "probe": "tester"}[fn]
+	// Satellite firmware is capture-only; ED sweeps and probe TX must land on
+	// a radio the host can actually command to do them (the port's local one).
+	capable := func(r *radios.Radio) bool {
+		return !(r.Relayed && (fn == "spectrum" || fn == "probe"))
+	}
 	capturing := func(r *radios.Radio) bool { return (r.Mode == 1 || r.Mode == 3) && !r.Stopped }
 	conflicts := func(r *radios.Radio) bool {
 		switch fn {
@@ -303,13 +308,13 @@ func (s *Server) allocate(fn string) (port string, radioID int, ok, interrupt bo
 		return false // probes piggyback on capture
 	}
 	for _, r := range list { // 1) dedicated role
-		if roleOf(r.RadioID) == dedicated {
+		if roleOf(r.RadioID) == dedicated && capable(r) {
 			return r.Port, r.RadioID, true, false, ""
 		}
 	}
 	var intr *radios.Radio // 2) an "any" radio (prefer free)
 	for _, r := range list {
-		if roleOf(r.RadioID) == "any" {
+		if roleOf(r.RadioID) == "any" && capable(r) {
 			if !conflicts(r) {
 				return r.Port, r.RadioID, true, false, ""
 			}
@@ -325,7 +330,7 @@ func (s *Server) allocate(fn string) (port string, radioID int, ok, interrupt bo
 	}
 	if fn == "probe" { // 3) piggyback probe on a capturing radio
 		for _, r := range list {
-			if capturing(r) {
+			if capturing(r) && capable(r) {
 				return r.Port, r.RadioID, true, false, ""
 			}
 		}
@@ -1481,8 +1486,26 @@ func (s *Server) Handler() http.Handler {
 			http.Error(w, "bad radio id", 400)
 			return
 		}
+		role := r.URL.Query().Get("role")
+		// Satellite firmware implements capture only (set channel / start /
+		// stop over the SPI relay) — no ED, no hopping, no TX injection.
+		// Without this check the role sticks in config but the mode command
+		// falls through to the port's LOCAL radio, silently swapping the two
+		// radios' functions (and losing capture on the home channel).
+		if s.Radios != nil {
+			for _, rd := range s.Radios.List() {
+				if rd.RadioID == id && rd.Relayed {
+					switch role {
+					case "spectrum", "tester", "hopper":
+						writeJSON(w, map[string]any{"ok": false, "reason": fmt.Sprintf(
+							"Radio %d is an SPI satellite — satellite firmware only captures (channel/start/stop); it can't run %s. Assign that role to the local radio (id 0).", id, role)})
+						return
+					}
+				}
+			}
+		}
 		if s.SetRole != nil {
-			s.SetRole(id, r.URL.Query().Get("role"))
+			s.SetRole(id, role)
 		}
 		writeJSON(w, map[string]any{"ok": true})
 	})
