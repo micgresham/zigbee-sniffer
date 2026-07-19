@@ -1377,10 +1377,64 @@ func (d *DB) Diagnostics(ourPan int) []map[string]any {
 			}
 			add(sev, "HA/zigpy log", fmt.Sprintf("%s%s — %s (%s)", message, countNote, humanDur(now-ts)+" ago", logger), addr, ts)
 		})
+	decayByAge(out, float64(time.Now().Unix()))
 	if len(out) == 0 {
 		add("info", "All clear", "no link/route/signal issues detected yet — keep capturing", -1, 0)
 	}
 	return out
+}
+
+// decayCategories are the event-type findings whose urgency fades with age: a
+// route failure or address conflict from a day ago is history, not a live
+// CRITICAL. Condition-type findings (Silent device, Weak link, Coordinator,
+// ...) are deliberately excluded — their timestamp is "since when," so a long
+// duration means the problem is MORE current, not less, and they must not decay.
+var decayCategories = map[string]bool{
+	"Address conflict": true, "Router health": true, "Route failure": true,
+	"Mesh event": true, "Rejoin": true, "Channel noise": true,
+	"Foreign network": true, "HA/zigpy log": true,
+}
+
+// decayByAge lowers the displayed severity of stale event-findings so the panel
+// reflects current health rather than the worst thing that ever happened. The
+// original severity is preserved in base_severity; age_s is added for the UI.
+// Steps: <1h full, 1–6h −1, 6–24h −2, >24h −3 (floored at info).
+func decayByAge(findings []map[string]any, now float64) {
+	ladder := []string{"critical", "error", "warning", "notice", "info"}
+	idx := map[string]int{"critical": 0, "error": 1, "warning": 2, "notice": 3, "info": 4}
+	for _, f := range findings {
+		ts, ok := f["ts"].(float64)
+		if !ok || ts <= 0 {
+			continue
+		}
+		age := now - ts
+		f["age_s"] = int(age)
+		if !decayCategories[f["category"].(string)] {
+			continue
+		}
+		f["event"] = true // a point-in-time event (safe for the UI's recency filter to hide when old)
+		base, _ := f["severity"].(string)
+		i, ok := idx[base]
+		if !ok {
+			continue
+		}
+		steps := 0
+		switch {
+		case age > 24*3600:
+			steps = 3
+		case age > 6*3600:
+			steps = 2
+		case age > 3600:
+			steps = 1
+		}
+		if ni := i + steps; steps > 0 && ni <= 4 {
+			f["base_severity"] = base
+			f["severity"] = ladder[ni]
+		} else if steps > 0 {
+			f["base_severity"] = base
+			f["severity"] = ladder[4]
+		}
+	}
 }
 
 // LabelPan tags a PAN with a manufacturer label (e.g. "Philips Hue") derived

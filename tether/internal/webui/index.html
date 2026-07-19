@@ -118,6 +118,7 @@ select{background:var(--field);color:var(--fg);border:1px solid var(--line);bord
 .diag .sev{font-size:10px;text-transform:uppercase;font-weight:700;width:56px}
 .diag.critical .sev{color:#ff5c8a}.diag.error .sev{color:var(--weak)}
 .diag.warning .sev{color:var(--fair)}.diag.notice .sev{color:var(--accent)}.diag.info .sev{color:var(--good)}
+.diag.aged{opacity:.62}
 .dgfilter{display:flex;flex-wrap:wrap;gap:6px 14px;margin-bottom:10px;font-size:12px}
 .dgfilter label{display:inline-flex;align-items:center;gap:4px;color:var(--dim);cursor:pointer}
 .diag .cat{font-weight:600;width:130px}.diag .msg{color:var(--dim);flex:1}
@@ -407,7 +408,16 @@ border-left:1px solid var(--line);transform:translateX(100%);transition:.2s;z-in
 
   <div class="panel wide" data-tab="diagnostics">
     <h2>Automatic diagnostics <span class="cnt" id="dg-cnt">0</span>
-      <span class="dim" style="font-weight:400;text-transform:none;font-size:11px">syslog levels · uncheck to hide a category</span></h2>
+      <span id="dg-health" class="tag" style="margin-left:6px"></span>
+      <span style="float:right;font-weight:400;text-transform:none;font-size:11px">
+        <label class="dim" title="Older event findings fade in severity; this hides ones past the window entirely. Ongoing conditions (silent device, weak link) always show.">show
+        <select id="dg-window">
+          <option value="0">all time</option>
+          <option value="86400">last 24h</option>
+          <option value="21600" selected>last 6h</option>
+          <option value="3600">last 1h</option>
+        </select></label></span></h2>
+    <div class="dim" style="font-size:11px;margin-bottom:8px">syslog levels · uncheck to hide a category · a finding's severity <b>fades with age</b> (a route failure from yesterday isn't a live CRITICAL); the count and health badge reflect current, un-aged issues only.</div>
     <div id="dg-filter" class="dgfilter"></div>
     <div id="diagnostics" class="diags"><span class="dim">analysing…</span></div>
   </div>
@@ -654,27 +664,43 @@ function renderWaterfall(samples){
       ctx.fillStyle=`rgb(${r},${g},${b})`;ctx.fillRect((c-11)*cw,row*rh,cw,Math.ceil(rh));}});
 }
 let dgHidden={}; // category → hidden?
+let dgWindow=21600; // recency window (seconds); 0 = all time
 async function loadDiagnostics(){const d=await j("/api/diagnostics");if(!d)return;
-  // category checkboxes (persist choices in dgHidden)
-  const cats=[...new Set(d.map(x=>x.category))].sort();
+  // Recency filter: hide point-in-time EVENTS older than the window. Ongoing
+  // conditions (no `event` flag — silent device, weak link, coordinator) always
+  // show regardless of age, since their timestamp is "since when", not "when".
+  const inWindow=x=>!dgWindow||!x.event||(x.age_s==null)||x.age_s<=dgWindow;
+  const windowed=d.filter(inWindow);
+  // category checkboxes count within the current window
+  const cats=[...new Set(windowed.map(x=>x.category))].sort();
   document.getElementById("dg-filter").innerHTML=cats.map(c=>{
-    const n=d.filter(x=>x.category===c).length;
+    const n=windowed.filter(x=>x.category===c).length;
     return `<label><input type=checkbox data-cat="${c}" ${dgHidden[c]?"":"checked"}> ${c} <span class=dim>(${n})</span></label>`;}).join("");
   document.querySelectorAll("#dg-filter input").forEach(cb=>cb.onchange=()=>{
     dgHidden[cb.dataset.cat]=!cb.checked;
     savePref("dg_hidden",Object.keys(dgHidden).filter(k=>dgHidden[k]).join(","));loadDiagnostics();});
-  const shown=d.filter(x=>!dgHidden[x.category]);
+  const shown=windowed.filter(x=>!dgHidden[x.category]);
   const rank={critical:0,error:1,warning:2,notice:3,info:4};
   shown.sort((a,b)=>((rank[a.severity]??9)-(rank[b.severity]??9))||((b.ts||0)-(a.ts||0)));
-  document.getElementById("dg-cnt").textContent=shown.filter(x=>["critical","error","warning"].includes(x.severity)).length;
+  // Health = worst EFFECTIVE (age-decayed) severity currently showing.
+  const nCrit=shown.filter(x=>["critical","error"].includes(x.severity)).length;
+  const nWarn=shown.filter(x=>x.severity==="warning").length;
+  document.getElementById("dg-cnt").textContent=nCrit+nWarn;
+  const hb=document.getElementById("dg-health");
+  if(hb){const set=(t,c)=>{hb.textContent=t;hb.style.background=c+"22";hb.style.color=c;};
+    if(nCrit)set("⚠ attention","var(--weak)");
+    else if(nWarn)set("minor issues","var(--fair)");
+    else set("✓ healthy","var(--good)");}
   dgShown=shown;
-  document.getElementById("diagnostics").innerHTML=shown.map((x,i)=>
-   `<div class="diag ${x.severity}" data-di="${i}" style="cursor:pointer">`+
-   `<span class=sev>${x.severity}</span><span class=cat>${x.category}</span>`+
-   `<span class=msg>${annotate(x.message)}</span>`+
-   `${x.ts?`<span class=dim style="font-size:11px;white-space:nowrap" title="${fmtTime(x.ts)}">${ageStr(x.ts)} ago</span>`:""}`+
-   `${x.addr?`<span class="addr" data-addr="${x.addr}" title="${x.addr}">${addrLabel(x.addr)}</span>`:""}</div>`).join("")
-   ||'<div class=dim>nothing to show (all categories hidden)</div>';
+  document.getElementById("diagnostics").innerHTML=shown.map((x,i)=>{
+    const agedNote=x.base_severity&&x.base_severity!==x.severity
+      ?` <span class=dim style="font-size:10px" title="was ${x.base_severity} when it happened; severity fades with age">(was ${x.base_severity})</span>`:"";
+    return `<div class="diag ${x.severity}${x.base_severity&&x.base_severity!==x.severity?' aged':''}" data-di="${i}" style="cursor:pointer">`+
+     `<span class=sev>${x.severity}</span><span class=cat>${x.category}</span>`+
+     `<span class=msg>${annotate(x.message)}${agedNote}</span>`+
+     `${x.ts?`<span class=dim style="font-size:11px;white-space:nowrap" title="${fmtTime(x.ts)}">${ageStr(x.ts)} ago</span>`:""}`+
+     `${x.addr?`<span class="addr" data-addr="${x.addr}" title="${x.addr}">${addrLabel(x.addr)}</span>`:""}</div>`;}).join("")
+   ||'<div class=dim>nothing in this window — network looks healthy (widen the window to see older history)</div>';
   document.querySelectorAll("#diagnostics .diag").forEach(el=>el.onclick=ev=>{
     const a=ev.target.closest(".addr");
     if(a){ev.stopPropagation();showDetail(a.dataset.addr);return;}
@@ -683,8 +709,10 @@ let dgShown=[];
 // Click a diagnostic → a detailed drawer (severity, full message, device context).
 async function showDiag(d){if(!d)return;selected=null;
   document.getElementById("d-title").textContent=d.category;
+  const agedNote=d.base_severity&&d.base_severity!==d.severity
+    ?` <span class=dim style="font-size:11px">— aged down from <b>${d.base_severity}</b> (severity fades as the event ages)</span>`:"";
   let h=`<div class=kv>`+
-    `<div>Severity</div><div><span class="diag ${d.severity}" style="display:inline-block;padding:2px 10px;border-radius:6px"><span class=sev>${d.severity}</span></span></div>`+
+    `<div>Severity</div><div><span class="diag ${d.severity}" style="display:inline-block;padding:2px 10px;border-radius:6px"><span class=sev>${d.severity}</span></span>${agedNote}</div>`+
     `<div>Category</div><div>${d.category}</div>`+
     `${d.ts?`<div>When</div><div>${fmtTime(d.ts)} <span class=dim>(${ageStr(d.ts)} ago)</span></div>`:""}`+
     `<div>Details</div><div>${annotate(d.message)}</div>`;
@@ -1600,12 +1628,14 @@ async function initPrefs(){const p=await j("/api/prefs")||{};
   if(p.sp_dwell){const e=document.getElementById("sp-dwell");if(e)e.value=p.sp_dwell;}
   if(p.exp_fmt){const e=document.getElementById("exp-fmt");if(e)e.value=p.exp_fmt;}
   if(p.dg_hidden){dgHidden={};p.dg_hidden.split(",").forEach(c=>{if(c)dgHidden[c]=true;});}
+  if(p.dg_window!=null){dgWindow=+p.dg_window;const e=document.getElementById("dg-window");if(e)e.value=p.dg_window;}
   rgSig="";rgDirty=true;}
 // slider/select changes → persist
 document.getElementById("rg-sx").addEventListener("change",e=>savePref("rg_sx",e.target.value));
 document.getElementById("rg-sy").addEventListener("change",e=>savePref("rg_sy",e.target.value));
 document.getElementById("sp-dwell").addEventListener("change",e=>savePref("sp_dwell",e.target.value));
 document.getElementById("exp-fmt").addEventListener("change",e=>savePref("exp_fmt",e.target.value));
+document.getElementById("dg-window").addEventListener("change",e=>{dgWindow=+e.target.value;savePref("dg_window",e.target.value);loadDiagnostics();});
 on("c-reconnect",()=>post("/api/reconnect"));
 on("ota-go",async()=>{const f=document.getElementById("ota-file").files[0];
   if(!f){alert("Choose a firmware .bin file first");return;}
