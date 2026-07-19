@@ -16,11 +16,20 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
+
+// A Hue application key is embedded in the request URL path (/api/<key>/…), so
+// Go's http errors carry it verbatim. Scrub it from anything we log or expose
+// (the log ring feeds the UI's logs panel, and shows up in screenshots/exports)
+// — the key grants full control of the bridge.
+var hueKeyRe = regexp.MustCompile(`/api/[^/\s"]+`)
+
+func redactHueKey(s string) string { return hueKeyRe.ReplaceAllString(s, "/api/***") }
 
 var hueClient = &http.Client{
 	Timeout:   8 * time.Second,
@@ -106,8 +115,9 @@ func (m *HueManager) Connect(host, key string) {
 		for {
 			n, ch, err := hueFetch(hostOnly(host), key, m.reg)
 			if err != nil {
-				m.set(map[string]any{"connected": false, "host": host, "error": err.Error()})
-				log.Printf("Hue integration: %v (retry in 30s)", err)
+				safe := redactHueKey(err.Error())
+				m.set(map[string]any{"connected": false, "host": host, "error": safe})
+				log.Printf("Hue integration: %s (retry in 30s)", safe)
 			} else {
 				m.set(map[string]any{"connected": true, "host": host, "devices": n, "channel": ch})
 				log.Printf("Hue integration: %d device names loaded (bridge ch %d)", n, ch)

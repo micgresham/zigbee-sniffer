@@ -410,6 +410,12 @@ border-left:1px solid var(--line);transform:translateX(100%);transition:.2s;z-in
     <h2>Automatic diagnostics <span class="cnt" id="dg-cnt">0</span>
       <span id="dg-health" class="tag" style="margin-left:6px"></span>
       <span style="float:right;font-weight:400;text-transform:none;font-size:11px">
+        <label class="dim" title="Worst-first ranks by (age-decayed) severity; Newest orders by time.">sort
+        <select id="dg-sort">
+          <option value="sev" selected>worst first</option>
+          <option value="time">newest first</option>
+        </select></label>
+        &nbsp;
         <label class="dim" title="Older event findings fade in severity; this hides ones past the window entirely. Ongoing conditions (silent device, weak link) always show.">show
         <select id="dg-window">
           <option value="0">all time</option>
@@ -665,6 +671,7 @@ function renderWaterfall(samples){
 }
 let dgHidden={}; // category → hidden?
 let dgWindow=21600; // recency window (seconds); 0 = all time
+let dgSort="sev"; // "sev" = worst-first, "time" = newest-first
 async function loadDiagnostics(){const d=await j("/api/diagnostics");if(!d)return;
   // Recency filter: hide point-in-time EVENTS older than the window. Ongoing
   // conditions (no `event` flag — silent device, weak link, coordinator) always
@@ -681,7 +688,10 @@ async function loadDiagnostics(){const d=await j("/api/diagnostics");if(!d)retur
     savePref("dg_hidden",Object.keys(dgHidden).filter(k=>dgHidden[k]).join(","));loadDiagnostics();});
   const shown=windowed.filter(x=>!dgHidden[x.category]);
   const rank={critical:0,error:1,warning:2,notice:3,info:4};
-  shown.sort((a,b)=>((rank[a.severity]??9)-(rank[b.severity]??9))||((b.ts||0)-(a.ts||0)));
+  if(dgSort==="time") // newest first; ongoing conditions (no ts) count as "now" and lead
+    shown.sort((a,b)=>((b.ts||9e18)-(a.ts||9e18))||((rank[a.severity]??9)-(rank[b.severity]??9)));
+  else // worst first (age-decayed severity), newest within a level
+    shown.sort((a,b)=>((rank[a.severity]??9)-(rank[b.severity]??9))||((b.ts||0)-(a.ts||0)));
   // Health = worst EFFECTIVE (age-decayed) severity currently showing.
   const nCrit=shown.filter(x=>["critical","error"].includes(x.severity)).length;
   const nWarn=shown.filter(x=>x.severity==="warning").length;
@@ -1629,6 +1639,7 @@ async function initPrefs(){const p=await j("/api/prefs")||{};
   if(p.exp_fmt){const e=document.getElementById("exp-fmt");if(e)e.value=p.exp_fmt;}
   if(p.dg_hidden){dgHidden={};p.dg_hidden.split(",").forEach(c=>{if(c)dgHidden[c]=true;});}
   if(p.dg_window!=null){dgWindow=+p.dg_window;const e=document.getElementById("dg-window");if(e)e.value=p.dg_window;}
+  if(p.dg_sort){dgSort=p.dg_sort;const e=document.getElementById("dg-sort");if(e)e.value=p.dg_sort;}
   rgSig="";rgDirty=true;}
 // slider/select changes → persist
 document.getElementById("rg-sx").addEventListener("change",e=>savePref("rg_sx",e.target.value));
@@ -1636,6 +1647,7 @@ document.getElementById("rg-sy").addEventListener("change",e=>savePref("rg_sy",e
 document.getElementById("sp-dwell").addEventListener("change",e=>savePref("sp_dwell",e.target.value));
 document.getElementById("exp-fmt").addEventListener("change",e=>savePref("exp_fmt",e.target.value));
 document.getElementById("dg-window").addEventListener("change",e=>{dgWindow=+e.target.value;savePref("dg_window",e.target.value);loadDiagnostics();});
+document.getElementById("dg-sort").addEventListener("change",e=>{dgSort=e.target.value;savePref("dg_sort",e.target.value);loadDiagnostics();});
 on("c-reconnect",()=>post("/api/reconnect"));
 on("ota-go",async()=>{const f=document.getElementById("ota-file").files[0];
   if(!f){alert("Choose a firmware .bin file first");return;}
