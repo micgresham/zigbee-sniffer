@@ -15,8 +15,8 @@ flowchart LR
       P6[GPIO6 SCK]
       P7[GPIO7 MOSI]
       P2[GPIO2 MISO]
-      P10[GPIO10 CS0]
-      P20[GPIO20 DREADY0 in]
+      P10[GPIO18 CS0]
+      P20[GPIO21 DREADY0 in]
       P23[GPIO23 SYNC out]
       P5V[5V]
       PGND[GND]
@@ -52,9 +52,11 @@ Shared across all satellites:
 - `GPIO23` SYNC
 - `5V` and `GND`
 
-Per-satellite control lines:
-- `CS`: `GPIO10` (sat 1), `GPIO18` (sat 2), `GPIO19` (sat 3)
-- `DATA_READY`: `GPIO20` (sat 1), `GPIO21` (sat 2), `GPIO22` (sat 3)
+Per-satellite control lines (slot 1/2 selectors are physically reversed on the as-built
+carrier board — see `hardware/carrier/pinout.md` — so these intentionally don't run in
+numeric GPIO order):
+- `CS`: `GPIO18` (sat 1), `GPIO10` (sat 2), `GPIO19` (sat 3)
+- `DATA_READY`: `GPIO21` (sat 1), `GPIO20` (sat 2), `GPIO22` (sat 3)
 
 ```mermaid
 flowchart LR
@@ -63,11 +65,11 @@ flowchart LR
       PMOSI[GPIO7 MOSI]
       PMISO[GPIO2 MISO]
       PSYNC[GPIO23 SYNC]
-      PCS1[GPIO10 CS1]
-      PCS2[GPIO18 CS2]
+      PCS1[GPIO18 CS1]
+      PCS2[GPIO10 CS2]
       PCS3[GPIO19 CS3]
-      PDR1[GPIO20 DR1 in]
-      PDR2[GPIO21 DR2 in]
+      PDR1[GPIO21 DR1 in]
+      PDR2[GPIO20 DR2 in]
       PDR3[GPIO22 DR3 in]
       P5V[5V]
       PG[GND]
@@ -139,11 +141,11 @@ flowchart LR
 | SCK | GPIO6 | GPIO6 | Yes | Primary -> Satellite |
 | MOSI | GPIO7 | GPIO7 | Yes | Primary -> Satellite |
 | MISO | GPIO2 | GPIO2 | Yes | Satellite -> Primary |
-| CS1 | GPIO10 | GPIO4 (sat 1) | Yes (sat 1) | Primary -> Satellite |
-| CS2 | GPIO18 | GPIO4 (sat 2) | Optional (sat 2) | Primary -> Satellite |
+| CS1 | GPIO18 | GPIO4 (sat 1) | Yes (sat 1) | Primary -> Satellite |
+| CS2 | GPIO10 | GPIO4 (sat 2) | Optional (sat 2) | Primary -> Satellite |
 | CS3 | GPIO19 | GPIO4 (sat 3) | Optional (sat 3) | Primary -> Satellite |
-| DREADY1 | GPIO20 | GPIO3 (sat 1) | Yes (sat 1) | Satellite -> Primary |
-| DREADY2 | GPIO21 | GPIO3 (sat 2) | Optional (sat 2) | Satellite -> Primary |
+| DREADY1 | GPIO21 | GPIO3 (sat 1) | Yes (sat 1) | Satellite -> Primary |
+| DREADY2 | GPIO20 | GPIO3 (sat 2) | Optional (sat 2) | Satellite -> Primary |
 | DREADY3 | GPIO22 | GPIO3 (sat 3) | Optional (sat 3) | Satellite -> Primary |
 | SYNC | GPIO23 | GPIO5 | Yes | Primary -> Satellite |
 | Power | 5V | 5V | Yes | Power rail |

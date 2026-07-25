@@ -30,7 +30,7 @@ D+/D- on pins, an onboard FE1.1s 4-port hub can be added — pinout in the BOM n
 
 ```
         ┌──────── ESP32-C6-DevKitC-1 (PRIMARY, SPI master) ────────┐
-        │  SCK6  MOSI7  MISO2   CS:10/18/19   DREADY:20/21/22  SYNC:23
+        │  SCK6  MOSI7  MISO2   CS:18/10/19   DREADY:21/20/22  SYNC:23
         └──┬──────┬──────┬─────────┬───┬───┬──────┬───┬───┬─────┬──┘
    shared  │ SCK  │ MOSI │ MISO    │CS0│CS1│CS2   │DR0│DR1│DR2  │ SYNC (fan-out)
    bus ────┼──────┼──────┼────┐    │   │   │      │   │   │     │
@@ -40,6 +40,8 @@ D+/D- on pins, an onboard FE1.1s 4-port hub can be added — pinout in the BOM n
         │  CS10  DREADY3  SYNC11 ◄──────┼───┼──────────────────┘ (SYNC to all)
         └───────────────────┘ │  └─────┘   │   └──────┘
         (Satellites 2,3 identical, on shared SCK/MOSI/MISO, own CS_i + DREADY_i)
+        (as-built: slot 1/2 CS+DREADY selectors are physically reversed vs. the
+        original netlist — CS0/DR0 above is satellite 1's actual GPIO18/21 pair)
 ```
 
 - **Shared** across all boards: `SCK`, `MOSI`, `MISO`, `GND`, `5V`.

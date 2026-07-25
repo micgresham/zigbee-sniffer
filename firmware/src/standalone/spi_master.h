@@ -17,8 +17,11 @@ extern "C" {
 #define PRI_PIN_MOSI  7
 #define PRI_PIN_MISO  2
 // per-satellite chip-select and data-ready lines, plus a shared SYNC output
-#define PRI_CS_PINS    {10, 18, 19}
-#define PRI_DREADY_PINS {20, 21, 22}
+// NOTE: slots 1 and 2 are swapped here (not in numeric GPIO order) because the
+// carrier board's slot 1/slot 2 selectors are physically reversed — this keeps
+// radio_id 1/2 matching the silkscreen slot labels instead of the raw wiring.
+#define PRI_CS_PINS    {18, 10, 19}
+#define PRI_DREADY_PINS {21, 20, 22}
 #define PRI_PIN_SYNC   23
 
 typedef void (*spi_frame_cb_t)(uint8_t radio_id, const captured_frame_t *cf);
