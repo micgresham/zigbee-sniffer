@@ -28,6 +28,15 @@ void radio_capture_stop(void);   // stop receiving
 uint32_t radio_capture_count(void);        // frames captured
 uint32_t radio_capture_dropped_buf(void);  // frames dropped (queue full)
 
+// Serialize radio access. The 802.15.4 HAL is NOT safe to drive from two tasks
+// at once (e.g. the command task starting an ED scan or TX while the main loop
+// is mid-sweep) — concurrent access hangs the radio state machine. Any code path
+// on a task OTHER than the one that owns the capture loop must wrap its radio
+// operations (ed_sweep, probe/beacon TX, channel/start/stop) in these. Safe to
+// call before radio_capture_init(); it lazily creates the mutex.
+void radio_lock(void);
+void radio_unlock(void);
+
 #ifdef __cplusplus
 }
 #endif

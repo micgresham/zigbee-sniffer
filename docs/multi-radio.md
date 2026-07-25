@@ -20,6 +20,15 @@ is purely additive.
    for the dropout hunt.
 3. **Multi-channel survey** — radios on different channels to watch several at once.
 
+> **Satellites are full radios (firmware ≥ 0.32).** A satellite is no longer capture-only — it
+> can take **any** role in the Config → Radios table: `sniffer`, `spectrum` (ED sweep),
+> `tester` (active probe TX), or `hopper`. The host wraps each command in `CMD_SAT_RELAY` so it
+> reaches the satellite over SPI, and the satellite's ED/probe results are relayed back up
+> through the primary. This means a satellite **placed at a problem device's location** can
+> measure that spot's noise floor or probe from there — exactly the "survey near the problem
+> device" case [spectrum.md](spectrum.md) calls for — while the primary keeps capturing your
+> home channel uninterrupted.
+
 ## Two ways to connect
 
 ### Host/USB mode (no wiring, scales to 3 easily)

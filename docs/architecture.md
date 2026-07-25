@@ -16,13 +16,13 @@ device drops and correlates it with channel noise and the coordinator's view.
                  └───────────┬───────────────────────┬───────────────────┬──────────┘
                    usb-sniffer│ (USB serial)  standalone│ (WiFi WS)  satellite│ (SPI)
                               ▼                          ▼                     ▼
-                  ┌──── Python host app ────┐   ┌── on-device lite UI ──┐   forwards to
+                  ┌──── tethered Go host ───┐   ┌── on-device lite UI ──┐   forwards to
                   │ decode + decrypt + DB   │   │ browser: decode +     │   a primary
-                  │ analytics + REST/WS API │   │ routing + incidents   │
-                  │ Wireshark export        │   │ + spectrum            │
-                  │ Z2M/ZHA integration     │   └───────────────────────┘
-                  │ React UI / HA add-on    │
+                  │ incidents + REST/WS API │   │ routing + incidents   │
+                  │ embedded web UI         │   │ + spectrum            │
+                  │ ZHA names/LQI · export  │   └───────────────────────┘
                   └─────────────────────────┘
+        (legacy Python host under host/ keeps the pcap/CLI tools + HA add-on)
 ```
 
 ## Three firmware builds, one capture core
@@ -46,8 +46,9 @@ keeps each build lean. See [hardware.md](hardware.md).
 The capture core stays thin — it ships raw frames + metadata, not decoded Zigbee. Decoding and
 optional decryption happen at the **presentation tier** so the heavy logic isn't duplicated in C:
 
-- **`usb-sniffer` → Python host:** full MAC/NWK/APS/ZCL decode, AES-CCM* decryption, analytics,
-  SQLite history (Block C).
+- **`tethered` → Go host:** full MAC/NWK/APS/ZCL decode, AES-CCM* decryption, SQLite history,
+  routing/spectrum/networks/incident analytics, embedded web UI. (The `usb-sniffer` build dir and
+  `BUILD_USB_SNIFFER` flag are the older name for the `tethered` PlatformIO env.)
 - **`standalone` → browser:** the on-device lite UI decodes frames and renders the routing graph
   and spectrum client-side (WebCrypto for AES-CCM*); the firmware only does lightweight
   aggregation + a LittleFS incident log (Block B).

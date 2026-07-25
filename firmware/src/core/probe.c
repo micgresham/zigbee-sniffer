@@ -15,6 +15,10 @@ void probe_init(probe_result_cb_t cb) { s_cb = cb; }
 void probe_send(uint16_t target, uint16_t pan_id)
 {
     s_target = target;
+    // The radio must be awake to transmit. If capture was stopped it's asleep,
+    // so wake it into RX first (also lets us hear the ACK).
+    esp_ieee802154_set_rx_when_idle(true);
+    esp_ieee802154_receive();
     // Minimal 802.15.4 MAC data frame addressed to the target, ACK requested.
     // FCF bits: type=Data(1), ack-request(bit5), PAN-ID-compression(bit6),
     //           dest addr short(bits10-11=2), src addr short(bits14-15=2).

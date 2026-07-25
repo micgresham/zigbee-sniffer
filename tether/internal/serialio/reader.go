@@ -84,7 +84,7 @@ func (r *Reader) Start() error {
 			close(r.done)
 		})
 	}()
-	r.st.Open.Store(true)
+	r.st.MarkOpen() // records open time for the fresh-connect liveness watchdog
 	r.st.Port.Store(strings.Join(r.ports, ", "))
 	return nil
 }

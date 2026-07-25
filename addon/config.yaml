@@ -1,41 +1,39 @@
-# Home Assistant add-on manifest.
-# Install by adding this repo as a custom add-on repository in the Supervisor.
+# Home Assistant add-on manifest for the Go tethered host (zbsniff).
+# Install: Settings → Add-ons → Add-on Store → ⋮ → Repositories → add this repo,
+# then install "Zigbee Sniffer & Diagnostics".
 name: Zigbee Sniffer & Diagnostics
-version: "0.1.0"
+version: "1.0.0"
 slug: zbsniff
 description: >-
-  Passive Zigbee/802.15.4 sniffer & diagnostics — device discovery, routing tree,
-  RF spectrum/interference, and incident logging for unresponsive-device problems.
-url: https://github.com/your/zigbee-sniffer
+  Zigbee/802.15.4 sniffer & diagnostics — device discovery, routing tree, RF
+  spectrum/interference, active testing, and incident logging. Single Go binary.
+url: https://github.com/mgresham/zigbee-sniffer
 arch:
   - aarch64
   - amd64
   - armv7
-  - armhf
 init: false
 startup: application
 boot: auto
-# Expose the web UI through HA's ingress (sidebar panel).
+# Serve the web UI through HA's ingress (a sidebar panel — no port to open).
 ingress: true
 ingress_port: 8080
 panel_icon: mdi:access-point-network
 panel_title: Zigbee Sniffer
-# Allow mapping the sniffer USB dongle(s) through to the container.
+# Map the C6 sniffer dongle(s) into the container.
 uart: true
 usb: true
-hassio_api: true
 homeassistant_api: true
 options:
-  serial_ports:
-    - /dev/ttyACM0
-  channel: 15
-  network_key: ""
-  decrypt: false
-  silence_threshold_s: 120
+  serial_ports: []          # empty = auto-detect the C6 native-USB port
+  channel: 0                # 0 = take it from the ZHA backup / leave as-is
+  network_key: ""           # Zigbee network key (hex) for decryption; blank = passive
+  ha_host: ""               # e.g. homeassistant.local — for friendly names + Net LQI
+  ha_token: ""              # HA long-lived access token (pairs with ha_host)
 schema:
   serial_ports:
-    - str
-  channel: int(11,26)
+    - str?
+  channel: int(0,26)
   network_key: str?
-  decrypt: bool
-  silence_threshold_s: int(5,3600)
+  ha_host: str?
+  ha_token: password?

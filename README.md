@@ -3,8 +3,9 @@
 A full-featured IEEE 802.15.4 / Zigbee diagnostic tool built on the **ESP32-C6**. Unlike the
 existing ESP32 sniffers that only stream frames to Wireshark, this project adds device
 discovery, per-device message history, an LQI/RSSI **routing tree**, **incident logging** for
-"device went unresponsive" problems, and **RF spectrum / interference analysis** using the
-radio's Energy-Detect (ED) scan.
+"device went unresponsive" problems, **RF spectrum / interference analysis** using the
+radio's Energy-Detect (ED) scan, and **neighbouring-network discovery** (passive survey +
+active beacon-request scan across channels 11–26).
 
 > **Why this exists:** to diagnose intermittent Zigbee dropouts on a Home Assistant network —
 > capturing what is *actually happening on-air* when a device drops, and correlating it with
@@ -22,9 +23,16 @@ The firmware ships as **three PlatformIO build profiles** sharing one capture co
 | **`tethered`** | any ESP32-C6 | Lean, WiFi off, high-fidelity. Framed serial → Wireshark **and** the Python host app. The "true sniffer." |
 | **`satellite`** | ESP32-C6 SuperMini | Dumb capture-and-forward over SPI to a primary (carrier board, standalone multi-radio). |
 
-A **Python / FastAPI host app** (packaged as a **Home Assistant Add-on**) provides the
-heavyweight experience: unlimited history in SQLite, full decode + optional decryption, rich
-React UI, Z2M/ZHA correlation, and Wireshark/pcap export.
+A **single-binary Go host** ([`tether/`](tether/)) plugs a USB C6 dongle into your PC/HA box and
+serves the whole diagnostic web UI (embedded, no runtime deps): live decode + optional decryption,
+SQLite history, routing tree, RF spectrum, neighbouring-network discovery (identified by
+manufacturer OUI + optional **Philips Hue** / Home Assistant name integrations), **per-network
+channel-airtime analysis** (frames/min by PAN + RSSI histograms — finds the loud neighbour that
+breaks your mesh from a *different* channel), **automatic
+silence/recovery incident logging**, and CSV/JSON export. (A legacy
+**Python / FastAPI** host under [`host/`](host/) still provides the pcap/CLI tools and the HA
+add-on payload.) The host self-heals the serial link and encrypts secrets (network key, HA token)
+at rest.
 
 See [docs/architecture.md](docs/architecture.md) for the full picture.
 
@@ -110,14 +118,24 @@ See [docs/getting-started.md](docs/getting-started.md) for the full walkthrough.
 
 ## Documentation
 
-Everything is documented under [`docs/`](docs/). Start with
-[getting-started.md](docs/getting-started.md) and [architecture.md](docs/architecture.md).
+**New here? → [Quickstart](docs/quickstart.md) · [User Guide](docs/user-guide.md)** (with diagrams).
+Also available in **Word**: [quickstart.docx](docs/quickstart.docx) · [user-guide.docx](docs/user-guide.docx).
+
+![Architecture](docs/images/architecture.svg)
+
+Everything else is under [`docs/`](docs/): [architecture.md](docs/architecture.md),
+[networks.md](docs/networks.md) (seeing other Zigbee networks), [spectrum.md](docs/spectrum.md),
+[deployment-addon.md](docs/deployment-addon.md) (run inside Home Assistant), [ota.md](docs/ota.md)
+(firmware updates), [hardware.md](docs/hardware.md), [troubleshooting.md](docs/troubleshooting.md),
+and the [protocol spec](protocol/framing.md).
 
 ## Safety & scope
 
-This is a **passive receiver / diagnostic tool** for *your own* network. Decryption requires
-*your own* Zigbee network key (see [docs/decoding-and-decryption.md](docs/decoding-and-decryption.md)).
-It does not transmit Zigbee traffic or join the network.
+A **diagnostic tool** for *your own* network. It's a passive receiver by default; decryption
+requires *your own* Zigbee network key (see
+[docs/decoding-and-decryption.md](docs/decoding-and-decryption.md)). The optional **Active testing**
+mode transmits a MAC probe (and awaits an ACK) to verify a device is alive — it never joins the
+network, and it's gated behind explicit user actions.
 
 ## License
 

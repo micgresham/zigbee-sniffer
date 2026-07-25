@@ -31,6 +31,7 @@ typedef enum {
     MSG_ACK            = 0x05,
     MSG_INCIDENT       = 0x06,   // payload: UTF-8 JSON (see docs/incidents.md)
     MSG_PROBE_RESULT   = 0x07,   // radio_id(1) target(2) acked(1) rssi(i8) lqi(1)
+    MSG_OTA_STATUS     = 0x08,   // target(1) state(1) received(4) total(4) err(1)
     // host -> device (0x8_)
     CMD_SET_CHANNEL    = 0x81,
     CMD_SET_MODE       = 0x82,
@@ -42,7 +43,41 @@ typedef enum {
     CMD_GET_STATUS     = 0x88,
     CMD_SET_RADIO_ID   = 0x89,
     CMD_PROBE          = 0x8A,   // active test: target(2) pan(2) — TX a MAC frame, await ACK
+    CMD_OTA_BEGIN      = 0x8B,   // target(1) total_size(4) img_crc32(4)
+    CMD_OTA_DATA       = 0x8C,   // target(1) offset(4) chunk(n)
+    CMD_OTA_END        = 0x8D,   // target(1)
+    CMD_OTA_ABORT      = 0x8E,   // target(1)
+    CMD_BEACON_REQ     = 0x8F,   // active scan: TX an 802.15.4 beacon request (no payload)
+    CMD_TX_RAW         = 0x90,   // transmit a host-built raw MPDU (radio appends FCS)
+    // Relayed satellite control (tethered/standalone primary only): the primary
+    // strips target(1) and forwards the plain inner command (CMD_SET_CHANNEL /
+    // CMD_START / CMD_STOP) to satellite `target` over SPI — a satellite has no
+    // serial port of its own to address directly. Kept for backward
+    // compatibility; new code uses the generic CMD_SAT_RELAY below.
+    CMD_SAT_SET_CHANNEL = 0x91, // target(1) channel(1)
+    CMD_SAT_START       = 0x92, // target(1)
+    CMD_SAT_STOP        = 0x93, // target(1)
+    // Generic satellite relay: payload = target(1) + a COMPLETE inner zb frame
+    // (magic..crc). The primary strips target(1) and forwards the remaining
+    // bytes verbatim over SPI to satellite `target` — no per-command mapping,
+    // so any host->device command (mode, ED, hop, probe, beacon, raw TX, OTA)
+    // reaches a satellite. The satellite decodes the inner frame with its
+    // normal SPI decoder and dispatches it through on_command() as if received
+    // directly. Satellites are thus fully symmetric with the primary radio.
+    CMD_SAT_RELAY       = 0x94, // target(1) inner_frame(...)
 } zb_msg_type_t;
+
+// OTA target: 0 = this (tethered) C6, 1..3 = satellite over SPI.
+// OTA state (MSG_OTA_STATUS.state).
+enum { OTA_IDLE = 0, OTA_RECEIVING, OTA_WRITING, OTA_VERIFYING, OTA_OK, OTA_ERROR };
+
+// Set on a relayed satellite's CAPTURED_FRAME/STATUS radio_id byte by the
+// primary ONLY when that satellite's radio_id collides with the primary's own
+// (e.g. both left at their default) — without it the two are indistinguishable
+// on the wire and silently merge into one radio host-side. The low 7 bits are
+// still the satellite's real radio_id (1..3); mask this bit off to display it.
+// Fix the collision by giving the satellite a unique radio_id.
+#define RADIO_ID_COLLISION_BIT 0x80
 
 // Capture/operating mode (see framing.md `mode` enum)
 typedef enum {

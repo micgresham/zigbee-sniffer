@@ -25,11 +25,25 @@ a **noise-floor profile** over time — this is our spectrum analyzer. It does n
 
 One radio can either capture **or** measure energy at any instant. The `CAPTURE_PLUS_ED` mode
 interleaves them (you miss some frames during ED). A **second radio** removes the tradeoff: pin
-radio A to the HA channel for continuous capture while radio B sweeps. See
-[multi-radio.md](multi-radio.md).
+radio A to the HA channel for continuous capture while radio B sweeps. That second radio can be a
+USB dongle **or an SPI satellite** — as of firmware 0.32 satellites run the ED sweep too (assign
+the `spectrum` role in Config → Radios), so a satellite placed at a problem device's location
+measures the noise floor *there*, not at the sniffer. See [multi-radio.md](multi-radio.md).
 
 ## Interpreting values
 
 - ED is approximate and board-dependent; treat it as **relative**, not calibrated dBm.
 - A channel that is quiet at the sniffer's location may be noisy at a device's location — survey
   near the problem device, or use a satellite placed there.
+
+## Energy is not the whole story — see the networks too
+
+ED tells you a channel is *busy*, not *who* is on it. The **Zigbee networks** panel on the same
+tab identifies the actual networks (by PAN id) sharing the band, and a survey/active scan finds
+those on other channels. A raised noise floor **plus** a foreign PAN on your channel is a strong
+interference signal. See [networks.md](networks.md).
+
+The **Channel airtime** panel closes the loop with decoded-frame evidence: frames/min stacked by
+PAN plus a per-PAN RSSI histogram, over up to 24 h. It catches the case ED and channel-lists both
+miss — a busy network on a *different* channel that is physically close enough (loud RSSI) to
+desense your coordinator's receiver. Details in [networks.md](networks.md).

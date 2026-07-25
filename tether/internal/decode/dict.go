@@ -44,6 +44,21 @@ var nwkStatusCodes = map[byte]string{
 	0x10: "Network address update", 0x11: "Bad frame counter", 0x12: "Bad key sequence number",
 }
 
+// macCmdNames maps the IEEE 802.15.4 MAC command frame identifier (the first
+// payload byte of a "MAC Cmd" frame) to a name. Distinguishing these matters:
+// Data Request (0x04) is a routine poll an end device sends every cycle
+// (often once a minute) and means nothing on its own, while Association
+// Request/Orphan Notification/Coordinator Realignment are the genuine "this
+// device just (re)joined" signal — conflating them (treating any MAC Cmd as
+// a possible rejoin) is exactly the kind of false signal that makes a real
+// join event impossible to trust.
+var macCmdNames = map[byte]string{
+	0x01: "Association Request", 0x02: "Association Response",
+	0x03: "Disassociation Notification", 0x04: "Data Request",
+	0x05: "PAN ID Conflict Notification", 0x06: "Orphan Notification",
+	0x07: "Beacon Request", 0x08: "Coordinator Realignment", 0x09: "GTS Request",
+}
+
 // ZCL global command names.
 var zclGlobalNames = map[byte]string{
 	0x00: "Read Attributes", 0x01: "Read Attributes Rsp", 0x02: "Write Attributes",

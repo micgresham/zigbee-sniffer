@@ -43,10 +43,35 @@ func fmtAddr(addr int64, mode byte) string {
 // Summary is a one-line description of the MAC frame.
 func (m *MacFrame) Summary() string {
 	s := fmt.Sprintf("%s seq=%d", m.TypeName, m.Seq)
+	if cn := m.CmdName(); cn != "" {
+		s += ": " + cn
+	}
 	if m.SrcAddr >= 0 || m.DstAddr >= 0 {
 		s += " " + fmtAddr(m.SrcAddr, m.SrcMode) + "→" + fmtAddr(m.DstAddr, m.DstMode)
 	}
 	return s
+}
+
+// CmdID returns the MAC command frame identifier (first payload byte) when
+// this is a MAC Command frame (FrameType 3), else -1. See macCmdNames.
+func (m *MacFrame) CmdID() int {
+	if m.FrameType != 3 || len(m.Payload) == 0 {
+		return -1
+	}
+	return int(m.Payload[0])
+}
+
+// CmdName returns the human name for CmdID(), or "" if this isn't a MAC
+// Command frame.
+func (m *MacFrame) CmdName() string {
+	id := m.CmdID()
+	if id < 0 {
+		return ""
+	}
+	if n, ok := macCmdNames[byte(id)]; ok {
+		return n
+	}
+	return fmt.Sprintf("cmd 0x%02x", id)
 }
 
 // DecodeMAC decodes a raw MPDU. Tolerant of truncation.
@@ -115,6 +140,8 @@ type NwkFrame struct {
 	CommandID    int    // NWK command frames only (-1 otherwise)
 	StatusReason string // for "Network Status" command frames
 	StatusDest   int    // for "Network Status": the unreachable destination (-1 if none)
+	SrcExt       uint64 // 64-bit source IEEE address if present in the (plaintext) NWK header, else 0
+	DstExt       uint64 // 64-bit dest IEEE address if present, else 0
 	Payload      []byte
 }
 
@@ -164,10 +191,19 @@ func DecodeNWK(data []byte, networkKey []byte) *NwkFrame {
 	o++
 	n.Seq = int(data[o])
 	o++
+	// These IEEE addresses live in the UNENCRYPTED NWK header, so they're
+	// readable even on foreign networks we can't decrypt — useful for vendor
+	// (OUI) identification.
 	if dstIeee {
+		if o+8 <= len(data) {
+			n.DstExt = binary.LittleEndian.Uint64(data[o:])
+		}
 		o += 8
 	}
 	if srcIeee {
+		if o+8 <= len(data) {
+			n.SrcExt = binary.LittleEndian.Uint64(data[o:])
+		}
 		o += 8
 	}
 	if multicast {
@@ -288,6 +324,18 @@ func DecodeAPS(data []byte) *ApsFrame {
 	return a
 }
 
+// ZDODeviceAnnounce extracts (nwkAddr, ieeeAddr) from a ZDO Device_annce
+// (profile 0x0000, cluster 0x0013), an authoritative short<->IEEE mapping a
+// device broadcasts when it (re)joins. Only present on a decrypted frame.
+// Payload: seq(1) nwkAddr(2 LE) ieee(8 LE) capability(1).
+func ZDODeviceAnnounce(a *ApsFrame) (nwk uint16, ext uint64, ok bool) {
+	if a == nil || a.Profile != 0x0000 || a.Cluster != 0x0013 || len(a.Payload) < 11 {
+		return 0, 0, false
+	}
+	p := a.Payload
+	return uint16(p[1]) | uint16(p[2])<<8, binary.LittleEndian.Uint64(p[3:11]), true
+}
+
 var zclGlobalCmds = map[byte]string{
 	0x00: "Read Attributes", 0x01: "Read Attributes Response",
 	0x02: "Write Attributes", 0x0A: "Report Attributes", 0x0B: "Default Response",
@@ -336,6 +384,13 @@ type Decoded struct {
 	NWK *NwkFrame
 	APS *ApsFrame
 	ZCL *ZclFrame
+	// SixLowPAN is true when the MAC payload looks like 6LoWPAN (RFC
+	// 4944/6282) rather than a Zigbee NWK frame — i.e. this is a Thread
+	// network (and so, very likely, carrying Matter, since nearly all Matter
+	// devices run over Thread) sharing the same 802.15.4 band, not another
+	// Zigbee network. We can't verify Matter specifically without that
+	// network's key — same limitation as any other foreign/encrypted network.
+	SixLowPAN bool
 }
 
 // Summary is a one-line cross-layer description.
@@ -373,6 +428,26 @@ func (d *Decoded) zclSummary() string {
 	return fmt.Sprintf("cmd 0x%02x", z.CommandID)
 }
 
+// isSixLowPANDispatch reports whether b is a 6LoWPAN dispatch byte (RFC
+// 4944/6282) — the cheapest signal that a MAC payload which failed the
+// Zigbee NWK version check is actually Thread, not just an unrecognized or
+// malformed Zigbee frame. Covers the patterns that matter in practice:
+// LOWPAN_IPHC (nearly all real Thread traffic), uncompressed IPv6, mesh
+// addressing, and 6LoWPAN fragmentation.
+func isSixLowPANDispatch(b byte) bool {
+	switch {
+	case b == 0x41: // uncompressed IPv6 (RFC 4944 §5.1)
+		return true
+	case b&0xE0 == 0x60: // LOWPAN_IPHC (RFC 6282)
+		return true
+	case b&0xC0 == 0x80: // mesh addressing header
+		return true
+	case b&0xF8 == 0xC0, b&0xF8 == 0xE0: // fragmentation: first / subsequent
+		return true
+	}
+	return false
+}
+
 // DecodeFrame walks MAC → NWK → APS → ZCL, decrypting if a key is supplied.
 func DecodeFrame(mpdu []byte, networkKey []byte) *Decoded {
 	mac := DecodeMAC(mpdu)
@@ -381,7 +456,11 @@ func DecodeFrame(mpdu []byte, networkKey []byte) *Decoded {
 		return d
 	}
 	d.NWK = DecodeNWK(mac.Payload, networkKey)
-	if d.NWK == nil || (d.NWK.Secure && !d.NWK.Decrypted) {
+	if d.NWK == nil {
+		d.SixLowPAN = isSixLowPANDispatch(mac.Payload[0])
+		return d
+	}
+	if d.NWK.Secure && !d.NWK.Decrypted {
 		return d
 	}
 	d.APS = DecodeAPS(d.NWK.Payload)

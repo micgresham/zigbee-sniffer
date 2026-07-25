@@ -1,23 +1,22 @@
 # API (REST + WebSocket)
 
-> Status: design. Implemented in Block C (host app) and mirrored by a lighter WS API on the
-> standalone device (Block B). Documented here so the frontend and integrations can be built
-> against a stable contract.
-
-The host app (FastAPI) serves the React UI and exposes:
+> Status: implemented in the tethered Go host ([`tether/internal/api`](../tether/internal/api)),
+> which serves the embedded web UI. A lighter WS API on the standalone device mirrors the live
+> feed. See [host.md](host.md).
 
 ## WebSocket `/ws`
 
-Push channel for live data (newline-delimited JSON / binary framing per
-[protocol/framing.md](../protocol/framing.md)). Message kinds:
-- `frame` — decoded captured frame (addresses, type, RSSI/LQI, decoded summary).
+Push channel for live data (JSON events). Message kinds (`kind` field):
+- `frame` — decoded captured frame (channel, RSSI/LQI, type, decoded summary, decrypted).
 - `ed` — energy-detect sample (channel, dBm, sweep id).
-- `status` — per-radio status/counters.
-- `incident` — a newly detected incident.
-- `device` / `link` — device-registry and link-quality updates.
+- `status` — per-radio status/counters (mode, channel, captured, uptime, fw…).
+- `incident` — a newly detected incident (silence / recovered) with channel + ED.
+- `survey` — whole-band survey progress (`channel`, `active`, `done`).
+- `probe` — active-test probe result (target, acked, RSSI/LQI).
+- `ota` — firmware-update progress (target, state, received/total).
 
-Client → server: `set_channel`, `set_mode`, `set_hop`, `ed_scan`, `set_key`, `start`, `stop`
-(mapped to the device commands).
+Commands go over REST (below), not the socket. The standalone device's WS additionally accepts
+binary command frames (`set_channel`, `set_mode`, `ed_scan`, `set_key`).
 
 ## REST (read/query history)
 
@@ -27,14 +26,29 @@ Client → server: `set_channel`, `set_mode`, `set_hop`, `ed_scan`, `set_key`, `
 | GET | `/api/devices/{addr}/messages` | recent decoded messages for a device |
 | GET | `/api/routing` | nodes + edges for the routing tree (LQI-colored) |
 | GET | `/api/spectrum?from=&to=` | ED time-series for the waterfall + channel advice |
-| GET | `/api/incidents` | incident list (filterable) |
+| GET | `/api/networks` | every PAN id seen on-air (`networks[]`: `pan`, `channel`, `count`, `last_seen`, `label`) plus `ours` (your PAN) — see [networks.md](networks.md) |
+| GET | `/api/decode?hex=` | layer-by-layer decode of one frame (MAC/NWK/APS/ZCL + raw) for the inspector |
+| GET | `/api/device_info?addr=` | a device's capabilities (endpoints, in/out clusters, manufacturer, model, power) as ZHA discovered them |
+| GET | `/api/traceroute?addr=` | path from the coordinator to a device with per-hop LQI (ZHA neighbour table, else observed links) |
+| POST | `/api/reinterview` | force a fresh capability pull from the coordinator (ZHA) — no TX |
+| POST | `/api/interrogate?addr=&what=` | **⚠ transmits.** Build + send an NWK-secured ZDO request (`what` = `bindings`/`endpoints`/`node`); the reply is captured passively. Needs firmware ≥ 0.28 |
+| GET | `/api/export?what=frames&format=pcap` | download captured frames as a Wireshark pcap (LINKTYPE_IEEE802_15_4_TAP; RSSI/LQI/channel as TAP TLVs). `format` also = `csv`/`json` for any `what` |
+| POST | `/api/survey?active=&dwell=` | run a whole-band survey: hop channels 11–26 collecting PANs. `active=1` also TX's a beacon request per channel (needs firmware ≥ 0.26); `dwell` = ms/channel. Progress streams on `/ws` as `{"kind":"survey",...}` |
+| POST | `/api/monitor?channel=&dwell=` | watch a foreign network: default channel = paired Hue bridge, else busiest foreign PAN. Uses a spare/satellite radio continuously (`monitor:<ch>` role) if available, else a timed snapshot on the primary (`{"kind":"monitor",...}` on `/ws`) |
+| GET | `/api/incidents` | incident list (silence/recovery, newest first) — see [incidents.md](incidents.md) |
+| GET/POST | `/api/incident_config?silence=N` | get/set the silence threshold (seconds) the host detector uses |
 | GET | `/api/incidents/{id}` | incident detail + context + pcap slice link |
 | GET | `/api/export/pcap?from=&to=` | pcap (LINKTYPE_IEEE802_15_4_TAP) of a time range |
 | GET/PUT | `/api/config` | settings (channels, key, hop, HA integration, thresholds) |
 | GET | `/api/radios` | connected radios + roles |
+| POST | `/api/ha_connect?host=&token=` · GET `/api/ha_status` | Home Assistant / ZHA name integration |
+| POST | `/api/hue_pair?host=` · GET `/api/hue_status` · POST `/api/hue_forget` | Philips Hue bridge (link-button pairing, then device names) |
 
-The exact schemas are defined with Pydantic models in `host/zbsniff/api/` and published as
-OpenAPI at `/docs` when the host app runs.
+Endpoints are registered in [`tether/internal/api/server.go`](../tether/internal/api/server.go);
+the JSON responses are plain maps (no formal schema). Additional live endpoints exist there
+(`/api/prefs`, `/api/mode`, `/api/hop`, `/api/set_channel`, `/api/key`, `/api/reconnect`,
+`/api/reset_radio`, `/api/allocate`, `/api/scan`, OTA, active-testing) — read the file for the
+full list.
 
 ## On-device (standalone build) — implemented
 

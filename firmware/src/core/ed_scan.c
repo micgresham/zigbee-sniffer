@@ -84,7 +84,8 @@ uint16_t ed_sweep(uint32_t hop_mask, uint32_t dwell_us, ed_sample_cb_t cb, void 
     } else if (worst == ED_NONE) {
         ESP_LOGW(TAG, "energy_detect timed out — done callback never fired");
     }
-    // Make sure continuous capture is armed after the sweep.
+    // Restore the capture channel and re-arm RX so capture resumes cleanly.
+    radio_capture_set_channel(saved_ch);
     esp_ieee802154_set_rx_when_idle(true);
     esp_ieee802154_receive();
     return id;

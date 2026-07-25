@@ -24,7 +24,10 @@ host/.ruff_cache/
 host/*.egg-info/
 host/build/
 host/dist/
+tether/dist/
 *.sqlite
+*.sqlite-wal
+*.sqlite-shm
 *.sqlite3
 *.db
 
@@ -54,5 +57,7 @@ hardware/**/gerbers/
 
 # PlatformIO-generated per-env sdkconfig (regenerated from sdkconfigs/*.defaults)
 firmware/sdkconfig.standalone
-firmware/sdkconfig.usb-sniffer
+firmware/sdkconfig.tethered
 firmware/sdkconfig.satellite
+docs/tools/.venv/
+docs/tools/_figs/

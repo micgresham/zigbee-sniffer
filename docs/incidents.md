@@ -1,9 +1,26 @@
 # Incident logging — the core diagnostic
 
-> Status: **on-device engine implemented (Block B)** — silence detection in firmware
-> (`standalone/incidents.c`), persisted to flash (SPIFFS), served at `GET /incidents`, and pushed
-> live to the browser via `MSG_INCIDENT`. Additional rules (route errors, rejoin/retry storms)
-> and the full host engine with unlimited history + coordinator correlation come in Block C.
+> Status: **implemented on both tiers.** Host-side silence/recovery detection runs in the
+> tethered host (`tether/internal/store/db.go` `DetectIncidents`, driven from `cmd/zbsniff`),
+> and an on-device engine (`standalone/incidents.c`) runs in the standalone build. Additional
+> rules (route errors, rejoin/retry storms) and coordinator correlation are still to come.
+
+## Host engine (tethered build) — implemented
+
+The **tethered** firmware does no incident detection (that code is `#if BUILD_STANDALONE`), so on
+the host the detection runs in Go. A background goroutine ticks every ~20 s and calls
+`DB.DetectIncidents(threshold)`, which:
+1. scans the `devices` table for any device heard regularly (≥5 frames) whose `last_seen` is now
+   older than the **silence threshold** (default **120 s**, set in the **Config → Incident
+   detection** panel and persisted to `zbsniff.yaml` as `incident_silence_s`);
+2. logs a **silence** incident stamped with the channel's latest **energy** (ED) — the
+   "was it interference?" evidence — and a **recovered** incident when the device is heard again;
+3. broadcasts each new incident over the WebSocket so the Incidents view updates live.
+
+Down-state is derived from the incidents table itself (latest `silence` vs `recovered` per
+device), so it survives host restarts and never double-fires. Sleepy/battery end-devices check in
+infrequently and can trip a short threshold — raise it, or watch mains-powered routers (which
+should be chatty) for real dropouts. Endpoint: `GET/POST /api/incident_config?silence=N`.
 
 ## On-device engine (standalone build) — implemented
 

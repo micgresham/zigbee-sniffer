@@ -97,6 +97,11 @@ Result of an active MAC probe (see `CMD_PROBE`). Payload:
 `radio_id(1)` `target(2, LE short addr)` `acked(1)` `rssi(int8, ACK RSSI)` `lqi(1, ACK LQI)`.
 `acked=1` means the target's 802.15.4 MAC auto-ACKed — its radio is alive and on-channel.
 
+#### `0x08 OTA_STATUS`
+Firmware-update progress (see `CMD_OTA_*` and [docs/ota.md](../docs/ota.md)). Payload:
+`target(1)` `state(1)` `received(4, LE)` `total(4, LE)` `err(1)`.
+`state`: 0 idle · 1 receiving · 2 writing · 3 verifying · 4 ok(rebooting) · 5 error.
+
 ---
 
 ### Host → device  (`0x8_`)
@@ -113,6 +118,29 @@ Result of an active MAC probe (see `CMD_PROBE`). Payload:
 | `0x88` | `CMD_GET_STATUS`  | — (device replies with `STATUS`) |
 | `0x89` | `CMD_SET_RADIO_ID`| `radio_id(1)` (satellite provisioning) |
 | `0x8A` | `CMD_PROBE`       | `target(2, LE)` `pan(2, LE)` — TX a MAC frame to `target`, await ACK (active test). Device replies with `PROBE_RESULT`. |
+| `0x8B` | `CMD_OTA_BEGIN`   | `target(1)` `total_size(4, LE)` `img_crc32(4, LE)` — start a firmware update (target 0 = this C6, 1..3 = satellite over SPI) |
+| `0x8C` | `CMD_OTA_DATA`    | `target(1)` `offset(4, LE)` `chunk(n)` — a firmware chunk (≤512 B) |
+| `0x8D` | `CMD_OTA_END`     | `target(1)` — finish, verify, set boot slot, reboot |
+| `0x8E` | `CMD_OTA_ABORT`   | `target(1)` — cancel an in-progress update |
+| `0x8F` | `CMD_BEACON_REQ`  | — TX an 802.15.4 beacon request on the current channel (active network scan). Beacon replies arrive as ordinary `CAPTURED_FRAME`s. Requires firmware ≥ 0.26. |
+| `0x90` | `CMD_TX_RAW`      | `mpdu(n)` — transmit a host-built raw MPDU (radio appends the FCS). Used for active ZDO interrogation; **transmits on the live network**. Requires firmware ≥ 0.28. |
+| `0x91` | `CMD_SAT_SET_CHANNEL` | `target(1, 1..3)` `channel(1, 11..26)` — relayed to satellite `target` over SPI (tethered/standalone primary only); lets one satellite sit on a different channel than the primary. |
+| `0x92` | `CMD_SAT_START`   | `target(1, 1..3)` — relayed: (re)start capture on satellite `target`. |
+| `0x93` | `CMD_SAT_STOP`    | `target(1, 1..3)` — relayed: stop capture on satellite `target`. |
+| `0x94` | `CMD_SAT_RELAY`   | `target(1, 1..3)` `inner_frame(n)` — generic relay: the primary strips `target` and forwards the **complete inner zb frame** verbatim over SPI to satellite `target`. Any host→device command reaches a satellite this way. Requires firmware ≥ 0.32. |
+
+The `CMD_SAT_*` commands exist because `CMD_SET_CHANNEL`/`CMD_START`/`CMD_STOP` (above) always apply
+to the receiving device's **own** local radio — a satellite reached over SPI has no serial port of
+its own to send those to directly. The primary de-frames the `target` byte, strips it, and relays
+the inner command to that satellite's SPI slave.
+
+The three legacy `CMD_SAT_SET_CHANNEL/START/STOP` opcodes map one inner command each and remain for
+backward compatibility. `CMD_SAT_RELAY` (≥ 0.32) generalises this: it carries a whole encoded inner
+frame, so **every** command — `CMD_SET_MODE`, `CMD_ED_SCAN`, `CMD_SET_HOP`, `CMD_PROBE`,
+`CMD_BEACON_REQ`, `CMD_TX_RAW` — reaches a satellite unchanged. As of firmware 0.32 satellite
+firmware implements the full command set and its `MSG_ED_RESULT`/`MSG_PROBE_RESULT` are relayed back
+up through the primary, so a satellite can serve **any** radio role (sniffer, spectrum, tester,
+hopper), not just capture.
 
 ---
 

@@ -3,3 +3,15 @@
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 # CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG is not set
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
+# Satellite hardware is the ESP32-C6 SuperMini (ESP32-C6FH4, 4 MB flash) — the
+# shared sdkconfig.defaults sets 8 MB for the primary DevKitC-1, which if left
+# unoverridden bakes an 8 MB header into the satellite image. Flashing that onto
+# the real 4 MB chip fails the boot-time flash-size probe and crash-loops:
+#   E spi_flash: Detected size(4096k) smaller than the size in the binary
+#   image header(8192k). Probe failed.
+#   assert failed: __esp_system_init_fn_init_flash ... (flash_ret == ESP_OK)
+# partitions_ota.csv's last partition ends at 0x3A0000 (~3.6 MB), well inside 4 MB.
+# CONFIG_ESPTOOLPY_FLASHSIZE_8MB is not set
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"

@@ -30,7 +30,7 @@ D+/D- on pins, an onboard FE1.1s 4-port hub can be added — pinout in the BOM n
 
 ```
         ┌──────── ESP32-C6-DevKitC-1 (PRIMARY, SPI master) ────────┐
-        │  SCK6  MOSI7  MISO2   CS:10/18/19   DREADY:20/21/22  SYNC:23
+        │  SCK6  MOSI7  MISO2   CS:18/10/19   DREADY:21/20/22  SYNC:23
         └──┬──────┬──────┬─────────┬───┬───┬──────┬───┬───┬─────┬──┘
    shared  │ SCK  │ MOSI │ MISO    │CS0│CS1│CS2   │DR0│DR1│DR2  │ SYNC (fan-out)
    bus ────┼──────┼──────┼────┐    │   │   │      │   │   │     │
@@ -40,6 +40,8 @@ D+/D- on pins, an onboard FE1.1s 4-port hub can be added — pinout in the BOM n
         │  CS10  DREADY3  SYNC11 ◄──────┼───┼──────────────────┘ (SYNC to all)
         └───────────────────┘ │  └─────┘   │   └──────┘
         (Satellites 2,3 identical, on shared SCK/MOSI/MISO, own CS_i + DREADY_i)
+        (as-built: slot 1/2 CS+DREADY selectors are physically reversed vs. the
+        original netlist — CS0/DR0 above is satellite 1's actual GPIO18/21 pair)
 ```
 
 - **Shared** across all boards: `SCK`, `MOSI`, `MISO`, `GND`, `5V`.
@@ -74,3 +76,33 @@ D+/D- on pins, an onboard FE1.1s 4-port hub can be added — pinout in the BOM n
 
 See [netlist.csv](netlist.csv), [bom.csv](bom.csv), and [pinout.md](pinout.md) for the exact
 connections, parts, and pin map.
+
+---
+
+## Roadmap: from modules to a chip-down design
+
+The carrier above sockets four **pre-built modules** (1× DevKitC-1, 3× SuperMini) — fast to
+prototype and verify, since each module's crystal, flash, antenna matching, and USB bridge are
+already designed and working. The intended direction is to move away from depending on other
+manufacturers' modules: a future carrier revision would place the **ESP32-C6 chip itself**
+(or a bare SoC/SiP, not a finished module) directly on the carrier PCB, with the supporting
+circuitry — crystal oscillator, antenna matching network or PCB trace antenna, flash (if not
+using a SiP with integrated flash), 3V3 regulation, and USB or UART bridging for
+flashing/console — designed in-house instead of bought as a black box.
+
+What carries over unchanged: the SPI relay architecture, the GPIO-level pin assignments in
+[pinout.md](pinout.md) (these are chip pins, not module pins), and the shared power/ground
+topology above.
+
+What's new work, not just a layout change:
+- **RF design** — antenna matching and keep-out is currently "free" (each module vendor already
+  solved it); chip-down means designing and validating that ourselves.
+- **Certification exposure** — a certified module (which every board used today is) lets this ship
+  without independent radio certification. A custom antenna on our own PCB generally does **not**
+  inherit that certification — chip-down is a real regulatory/testing cost if this is ever more
+  than a personal build, not just an engineering exercise.
+- **Programming/console path** — decide per-board whether to keep a USB bridge chip (like the
+  current modules effectively provide) or rely on the C6's native USB-Serial/JTAG peripheral
+  brought out to a connector, which changes the BOM and the board's USB layout.
+
+None of this is scheduled yet — noted here so the intent doesn't get lost before it's designed.

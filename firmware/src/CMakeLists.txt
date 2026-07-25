@@ -9,6 +9,8 @@ idf_component_register(
         "core/radio_capture.c"
         "core/ed_scan.c"
         "core/probe.c"
+        "core/beacon.c"
+        "core/ota.c"
         "core/config_nvs.c"
         "usb-sniffer/app_main.c"
         "usb-sniffer/transport_usb.c"
@@ -20,6 +22,8 @@ idf_component_register(
         "standalone/web_assets/web_assets.c"
         "satellite/app_main.c"
         "satellite/transport_spi.c"
+        "satellite/led.c"
+        "satellite/led_encoder.c"
     INCLUDE_DIRS
         "core"
         "."
@@ -27,6 +31,7 @@ idf_component_register(
         ieee802154
         driver
         nvs_flash
+        app_update
         esp_timer
         log
         esp_wifi

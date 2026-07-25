@@ -27,6 +27,7 @@ const (
 	MsgAck           = 0x05
 	MsgIncident      = 0x06
 	MsgProbeResult   = 0x07
+	MsgOtaStatus     = 0x08
 
 	CmdSetChannel = 0x81
 	CmdSetMode    = 0x82
@@ -38,6 +39,29 @@ const (
 	CmdGetStatus  = 0x88
 	CmdSetRadioID = 0x89
 	CmdProbe      = 0x8A
+	CmdOtaBegin   = 0x8B
+	CmdOtaData    = 0x8C
+	CmdOtaEnd     = 0x8D
+	CmdOtaAbort   = 0x8E
+	CmdBeaconReq  = 0x8F
+	CmdTxRaw      = 0x90
+
+	// Relayed satellite control (target(1) + inner args, stripped and forwarded
+	// over SPI by the primary) — see docs on CMD_SET_CHANNEL/CMD_START/CMD_STOP.
+	CmdSatSetChannel = 0x91
+	CmdSatStart      = 0x92
+	CmdSatStop       = 0x93
+	CmdSatRelay      = 0x94
+)
+
+// OTA states (MsgOtaStatus.State).
+const (
+	OtaIdle = iota
+	OtaReceiving
+	OtaWriting
+	OtaVerifying
+	OtaOK
+	OtaError
 )
 
 // Capture modes
@@ -123,6 +147,55 @@ func CmdSetHopMsg(hopMask uint32, dwellMs uint16) []byte {
 // CmdSetRadioIDMsg provisions a dongle's radio-id (persisted to its NVS).
 func CmdSetRadioIDMsg(id byte) []byte { return Encode(CmdSetRadioID, []byte{id}) }
 
+// OTA command builders. target 0 = the tethered C6, 1..3 = a satellite.
+func CmdOtaBeginMsg(target byte, total, crc32 uint32) []byte {
+	p := make([]byte, 9)
+	p[0] = target
+	binary.LittleEndian.PutUint32(p[1:], total)
+	binary.LittleEndian.PutUint32(p[5:], crc32)
+	return Encode(CmdOtaBegin, p)
+}
+// CmdOtaDataMsg's wire format is deliberately NOT versioned/extended lightly:
+// this message is parsed by whatever firmware is CURRENTLY RUNNING on the
+// target, which is exactly the firmware an OTA update is trying to replace.
+// A field added here only helps once new firmware understanding it is
+// already installed — but the only way to install it is a transfer using
+// THIS message, parsed by the OLD firmware. Changing the format silently
+// breaks that transfer for every device still running anything older,
+// with no way to recover except a physical reflash. (Learned the hard way:
+// an added content-checksum field shifted every chunk's data by 4 bytes as
+// seen by old firmware, corrupting the image from byte zero — every
+// subsequent failure looked like a deeper bug until this was traced back.)
+func CmdOtaDataMsg(target byte, offset uint32, chunk []byte) []byte {
+	p := make([]byte, 5+len(chunk))
+	p[0] = target
+	binary.LittleEndian.PutUint32(p[1:], offset)
+	copy(p[5:], chunk)
+	return Encode(CmdOtaData, p)
+}
+func CmdOtaEndMsg(target byte) []byte   { return Encode(CmdOtaEnd, []byte{target}) }
+func CmdOtaAbortMsg(target byte) []byte { return Encode(CmdOtaAbort, []byte{target}) }
+
+// Relayed satellite control builders. target is the satellite's radio-id (1..3).
+func CmdSatSetChannelMsg(target, ch byte) []byte { return Encode(CmdSatSetChannel, []byte{target, ch}) }
+func CmdSatStartMsg(target byte) []byte          { return Encode(CmdSatStart, []byte{target}) }
+func CmdSatStopMsg(target byte) []byte           { return Encode(CmdSatStop, []byte{target}) }
+
+// CmdSatRelayMsg wraps a fully-encoded inner command frame so the primary
+// forwards it verbatim over SPI to satellite `target` (1..3). This is how any
+// host->device command (mode, ED, hop, probe, beacon, raw TX) reaches a
+// satellite — see CMD_SAT_RELAY in proto.h.
+func CmdSatRelayMsg(target byte, inner []byte) []byte {
+	return Encode(CmdSatRelay, append([]byte{target}, inner...))
+}
+
+// CmdBeaconReqMsg asks the radio to transmit an 802.15.4 beacon request on the
+// current channel; coordinators/routers reply with a beacon revealing their PAN.
+func CmdBeaconReqMsg() []byte { return Encode(CmdBeaconReq, nil) }
+
+// CmdTxRawMsg transmits a host-built raw MPDU (the radio appends the FCS).
+func CmdTxRawMsg(mpdu []byte) []byte { return Encode(CmdTxRaw, mpdu) }
+
 // CmdProbeMsg requests an active MAC probe of target (short addr) on pan.
 func CmdProbeMsg(target, pan uint16) []byte {
 	p := make([]byte, 4)
@@ -181,6 +254,15 @@ type ProbeResult struct {
 	Acked   bool
 	RSSI    int8
 	LQI     byte
+}
+
+// OtaStatus is an OTA progress report.
+type OtaStatus struct {
+	Target   byte
+	State    byte
+	Received uint32
+	Total    uint32
+	Err      byte
 }
 
 // ParsePayload decodes a payload by message type. Returns nil for unknown types.
@@ -242,6 +324,17 @@ func ParsePayload(msgType byte, p []byte) any {
 			Acked:   p[3] != 0,
 			RSSI:    int8(p[4]),
 			LQI:     p[5],
+		}
+	case MsgOtaStatus:
+		if len(p) < 11 {
+			return nil
+		}
+		return &OtaStatus{
+			Target:   p[0],
+			State:    p[1],
+			Received: binary.LittleEndian.Uint32(p[2:6]),
+			Total:    binary.LittleEndian.Uint32(p[6:10]),
+			Err:      p[10],
 		}
 	}
 	return nil
