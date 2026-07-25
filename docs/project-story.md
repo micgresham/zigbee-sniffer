@@ -144,3 +144,9 @@ sniffer diagnosed a garage RF dead zone, unmasked a Hue bridge desensing the coo
 *different* channel, and gained a per-network channel-airtime panel (frames/min by PAN + RSSI
 histograms) built directly from the question that week left unanswered — the full story is in
 [blog 6](blog-6-the-week-the-sniffer-earned-it.md).
+
+The carrier board itself has since come back from the fab, populated, and worked on the first
+power-up — the schematic review paid for itself, save for one reversed selector pair caught in
+the first ten minutes of bring-up and fixed in firmware rather than a respin. Photos and the full
+story are in [blog 7](blog-7-the-board-comes-home.md). The only work left on that front is no
+longer electrical: an enclosure, and a 3D printer.
