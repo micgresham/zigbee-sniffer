@@ -30,6 +30,7 @@ import (
 	"zbsniff/internal/proto"
 	"zbsniff/internal/radios"
 	"zbsniff/internal/runtime"
+	"zbsniff/internal/sdr"
 	"zbsniff/internal/stats"
 	"zbsniff/internal/store"
 )
@@ -134,32 +135,33 @@ func (h *Hub) Publish(event any) {
 
 // Server holds API dependencies.
 type Server struct {
-	DB   *store.DB
-	Hub  *Hub
-	Send CommandSink
-	Reg  *names.Registry  // optional name resolution (ZHA backup / HA API)
-	RT    *runtime.Runtime // mutable key + latest device status
-	HA    *names.HAManager // runtime HA connection
+	DB    *store.DB
+	Hub   *Hub
+	Send  CommandSink
+	Reg   *names.Registry   // optional name resolution (ZHA backup / HA API)
+	RT    *runtime.Runtime  // mutable key + latest device status
+	HA    *names.HAManager  // runtime HA connection
 	Hue   *names.HueManager // runtime Philips Hue bridge connection
-	Stats *stats.Stats     // connection/ingest counters
-	Logs  *logbuf.Buf      // host log ring
-	Web   []byte           // embedded index.html
+	Stats *stats.Stats      // connection/ingest counters
+	Logs  *logbuf.Buf       // host log ring
+	Web   []byte            // embedded index.html
 
 	SendTo    func(port string, b []byte) bool // per-radio command send ("" = broadcast)
 	Radios    *radios.Tracker                  // connected dongle identities
+	SDR       *sdr.Store                       // stitched wideband spectrum history (see sdr.go)
 	Watch     *WatchSet                        // addresses flagged for join/rejoin activity
 	OtaActive *atomic.Bool                     // true while an OTA transfer is in flight (see /api/ota) — tells the host's liveness watchdog not to force a reconnect and abort it
 	OtaProg   *OtaProgress                     // last acknowledged OTA_STATUS "received" per target — see /api/ota's flow-control gate
 
-	SaveConfig func(func(*config.Config)) // persist settings to the config file
+	SaveConfig func(func(*config.Config))     // persist settings to the config file
 	SetRole    func(radioID int, role string) // assign a radio's function
 	Roles      func() map[int]string          // current radio-id → role map
-	Reconnect  func()                          // force-reinit the serial link
-	About      map[string]any                  // version/build metadata for the About tab
-	Prefs      func() map[string]string        // current web-UI preferences (from config)
-	Silence    func() int                      // current incident silence threshold (seconds)
-	Channel    func() int                      // configured capture channel (for restore after a scan)
-	HopDwell   func() int                      // configured hop dwell ms (0 = pinned)
+	Reconnect  func()                         // force-reinit the serial link
+	About      map[string]any                 // version/build metadata for the About tab
+	Prefs      func() map[string]string       // current web-UI preferences (from config)
+	Silence    func() int                     // current incident silence threshold (seconds)
+	Channel    func() int                     // configured capture channel (for restore after a scan)
+	HopDwell   func() int                     // configured hop dwell ms (0 = pinned)
 
 	DemoActive         *atomic.Bool // true once demo mode (simulated data) is running
 	NoHardwareDetected *atomic.Bool // true once the hardware search has gone a while with nothing found — the UI offers Retry/Enter Demo Mode rather than switching automatically
@@ -298,7 +300,7 @@ func (s *Server) allocate(fn string) (port string, radioID int, ok, interrupt bo
 		case "spectrum":
 			return capturing(r)
 		case "capture":
-			return r.Mode == 2
+			return r.Mode == 2 || r.Mode == proto.ModeSdrSpectrum
 		}
 		return false // probes piggyback on capture
 	}
@@ -342,6 +344,8 @@ func activity(r *radios.Radio) string {
 		return "capturing"
 	case 2:
 		return "running an ED sweep"
+	case proto.ModeSdrSpectrum:
+		return "running the wideband SDR spectrum"
 	case 0:
 		return "idle"
 	}
@@ -412,9 +416,20 @@ func (s *Server) relayed(port string, radioID int) bool {
 // CmdSatRelay so the primary forwards it over SPI. This is the single path
 // that makes satellites fully symmetric — ED sweeps, hopping, probes, beacons,
 // raw TX all reach a satellite through here.
+// SatRelayGap spaces consecutive commands relayed to one satellite. The
+// primary clocks each relayed frame over SPI as soon as it arrives, and a
+// satellite's SPI slave isn't re-armed until it has finished handling the
+// previous transaction (including a console log line), so a second frame sent
+// back-to-back was silently dropped — e.g. the SDR start's CMD_SET_MODE right
+// after its CMD_SDR_CONFIG.
+const SatRelayGap = 25 * time.Millisecond
+
 func (s *Server) sendToRadio(port string, radioID int, frames ...[]byte) {
 	if s.relayed(port, radioID) {
-		for _, f := range frames {
+		for i, f := range frames {
+			if i > 0 {
+				time.Sleep(SatRelayGap)
+			}
 			s.SendTo(port, proto.CmdSatRelayMsg(byte(radioID), f))
 		}
 		return
@@ -1434,7 +1449,7 @@ func (s *Server) Handler() http.Handler {
 			list = radios
 		}
 		writeJSON(w, map[string]any{"radios": list, "pan": panHex(s.RT),
-			"roles": []string{"any", "sniffer", "spectrum", "tester", "hopper", "idle"}})
+			"roles": []string{"any", "sniffer", "spectrum", "sdr", "tester", "hopper", "idle"}})
 	})
 	// Zero every radio's frame/probe counters for a fresh count — doesn't
 	// touch identity, role, channel, or captured history in the DB.
@@ -1783,7 +1798,11 @@ func (s *Server) Handler() http.Handler {
 	})
 	// Dry-run: which radio would handle a function, or why none can.
 	mux.HandleFunc("/api/allocate", func(w http.ResponseWriter, r *http.Request) {
-		port, id, ok, interrupt, reason := s.allocate(r.URL.Query().Get("fn"))
+		allocFn := s.allocate
+		if r.URL.Query().Get("fn") == "sdr" {
+			allocFn = func(string) (string, int, bool, bool, string) { return s.allocateSDR() }
+		}
+		port, id, ok, interrupt, reason := allocFn(r.URL.Query().Get("fn"))
 		writeJSON(w, map[string]any{"ok": ok, "port": port, "radio": id,
 			"interrupt": interrupt, "reason": reason})
 	})
@@ -2025,6 +2044,7 @@ func (s *Server) Handler() http.Handler {
 		s.cmd(proto.Encode(byte(t), payload))
 		writeJSON(w, map[string]any{"sent": true, "type": t})
 	})
+	s.registerSDR(mux)
 	mux.HandleFunc("/ws", s.handleWS)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {

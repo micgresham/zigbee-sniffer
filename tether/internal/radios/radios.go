@@ -26,11 +26,12 @@ type Radio struct {
 	Frames   int64   `json:"frames"`
 	Probes   int64   `json:"probes"`
 	LastSeen float64 `json:"last_seen"`
-	Mode     int     `json:"mode"`    // last reported mode (1=capture 2=ed 3=cap+ed 0=idle, -1=unknown)
-	Stopped  bool    `json:"stopped"` // user pressed Stop (mode stays 'capture' but RX is off)
-	Role     string  `json:"role"`    // filled by the server from the role map
-	Relayed  bool    `json:"relayed"` // reached via SPI through another radio's port (a satellite)
+	Mode     int     `json:"mode"`     // last reported mode (1=capture 2=ed 3=cap+ed 0=idle, -1=unknown)
+	Stopped  bool    `json:"stopped"`  // user pressed Stop (mode stays 'capture' but RX is off)
+	Role     string  `json:"role"`     // filled by the server from the role map
+	Relayed  bool    `json:"relayed"`  // reached via SPI through another radio's port (a satellite)
 	UptimeS  int     `json:"uptime_s"` // last-reported seconds since boot; resets to ~0 across a reboot
+	SDR      bool    `json:"sdr"`      // firmware reports CAP_SDR (wideband spectrum capable)
 }
 
 // Tracker is a thread-safe (port, radio-id)→radio map.
@@ -130,6 +131,13 @@ func (t *Tracker) SetMode(port string, radioID, mode int) {
 	defer t.mu.Unlock()
 	r := t.resolve(port, radioID)
 	r.Mode = mode
+}
+
+// SetSDR records whether a radio's firmware advertises the wideband SDR.
+func (t *Tracker) SetSDR(port string, radioID int, ok bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.resolve(port, radioID).SDR = ok
 }
 
 // SetUptime records a radio's last-reported seconds-since-boot.

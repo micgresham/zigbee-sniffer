@@ -43,6 +43,10 @@ static volatile uint8_t  s_radio_id;
 static volatile uint32_t s_count;
 static volatile uint32_t s_dropped;
 static volatile bool     s_running; // true between start() and stop() — see set_channel()
+// True while another radio user (the wideband SDR, which drives the Wi-Fi PHY)
+// owns the RF. The 802.15.4 driver is fully disabled meanwhile; start/stop/
+// channel changes only update the state above, applied on resume.
+static volatile bool     s_suspended;
 
 // Driver callback: frame[0] = PSDU length, frame[1..] = PSDU (incl. FCS).
 void esp_ieee802154_receive_done(uint8_t *frame, esp_ieee802154_frame_info_t *frame_info)
@@ -97,6 +101,7 @@ void radio_capture_set_channel(uint8_t channel)
 {
     if (channel < ZB_CHANNEL_MIN || channel > ZB_CHANNEL_MAX) return;
     s_channel = channel;
+    if (s_suspended) return;   // applied by radio_capture_resume()
     // esp_ieee802154_set_channel() while the radio is actively mid-receive
     // (which it always is under any real traffic, once radio_capture_start()
     // has left it continuously auto-receiving) can silently fail to retune the
@@ -125,6 +130,7 @@ uint8_t radio_capture_get_channel(void) { return s_channel; }
 void radio_capture_start(void)
 {
     s_running = true;
+    if (s_suspended) return;   // applied by radio_capture_resume()
     esp_ieee802154_set_rx_when_idle(true);
     ESP_ERROR_CHECK(esp_ieee802154_receive());
 }
@@ -134,9 +140,41 @@ void radio_capture_stop(void)
     // Stop auto-receiving AND park the radio so it stops competing for the
     // antenna (important for WiFi coexistence in the standalone build).
     s_running = false;
+    if (s_suspended) return;
     esp_ieee802154_set_rx_when_idle(false);
     esp_ieee802154_sleep();
 }
+
+void radio_capture_suspend(void)
+{
+    if (s_suspended) return;
+    s_suspended = true;
+    esp_ieee802154_set_rx_when_idle(false);
+    esp_ieee802154_sleep();
+    // Disable, not just sleep: drops the driver's PHY reference so the Wi-Fi
+    // PHY can be brought up and retuned freely.
+    esp_ieee802154_disable();
+    ESP_LOGI(TAG, "802.15.4 suspended (RF handed to another user)");
+}
+
+void radio_capture_resume(void)
+{
+    if (!s_suspended) return;
+    // enable() re-runs MAC init, which resets the PIB — re-apply our settings.
+    esp_err_t err = esp_ieee802154_enable();
+    if (err != ESP_OK) ESP_LOGE(TAG, "802.15.4 re-enable failed: %s", esp_err_to_name(err));
+    esp_ieee802154_set_promiscuous(true);
+    esp_ieee802154_set_rx_when_idle(false);
+    esp_ieee802154_set_channel(s_channel);
+    s_suspended = false;
+    if (s_running) {
+        esp_ieee802154_set_rx_when_idle(true);
+        esp_ieee802154_receive();
+    }
+    ESP_LOGI(TAG, "802.15.4 resumed on channel %u (%s)", s_channel, s_running ? "capturing" : "stopped");
+}
+
+bool radio_capture_suspended(void) { return s_suspended; }
 
 uint32_t radio_capture_count(void)       { return s_count; }
 uint32_t radio_capture_dropped_buf(void) { return s_dropped; }

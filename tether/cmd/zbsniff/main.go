@@ -31,6 +31,7 @@ import (
 	"zbsniff/internal/radios"
 	"zbsniff/internal/runtime"
 	"zbsniff/internal/sched"
+	"zbsniff/internal/sdr"
 	"zbsniff/internal/serialio"
 	"zbsniff/internal/stats"
 	"zbsniff/internal/store"
@@ -39,7 +40,7 @@ import (
 
 // hostVersion is the zbsniff host app version (bump on release; can also be
 // overridden at build time with -ldflags "-X main.hostVersion=…").
-var hostVersion = "1.1.2"
+var hostVersion = "1.2.0"
 
 const author = "M. Gresham"
 
@@ -266,6 +267,7 @@ func main() {
 	}
 
 	hub := api.NewHub()
+	sdrStore := sdr.NewStore()
 	watch := api.NewWatchSet()
 	otaProg := api.NewOtaProgress()
 	var otaActive atomic.Bool
@@ -330,6 +332,9 @@ func main() {
 				proto.CmdSetModeMsg(proto.ModeCapture), proto.CmdStartMsg()}
 		case "idle":
 			return [][]byte{proto.CmdSetModeMsg(proto.ModeIdle), proto.CmdStopMsg()}
+		case "sdr":
+			// Wideband raw-I/Q spectrum; firmware without CAP_SDR just ignores it.
+			return [][]byte{api.DefaultSDRConfig(false).Frame(), proto.CmdSetModeMsg(proto.ModeSdrSpectrum)}
 		}
 		return nil
 	}
@@ -346,13 +351,29 @@ func main() {
 			}
 			return nil, false
 		}
+		relay := func(inner ...[]byte) [][]byte {
+			out := make([][]byte, len(inner))
+			for i, f := range inner {
+				out[i] = proto.CmdSatRelayMsg(target, f)
+			}
+			return out
+		}
 		switch role {
 		case "sniffer", "tester":
 			// No channel-set here either — same reasoning as roleFrames()
 			// above: channel is exclusively the per-radio Ch control's job.
-			return [][]byte{proto.CmdSatStartMsg(target)}, true
+			// The relayed mode-set takes a satellite back out of the SDR (or
+			// ED) sweep; plain CMD_SAT_START alone leaves its mode untouched.
+			return append(relay(proto.CmdSetModeMsg(proto.ModeCapture)), proto.CmdSatStartMsg(target)), true
+		case "spectrum", "hopper":
+			// Satellites run the full command set (≥ 0.32), so these are just
+			// roleFrames() relayed — previously unhandled, so the role was
+			// logged as applied while nothing was sent.
+			return relay(roleFrames(role)...), true
 		case "idle":
-			return [][]byte{proto.CmdSatStopMsg(target)}, true
+			return append(relay(proto.CmdSetModeMsg(proto.ModeIdle)), proto.CmdSatStopMsg(target)), true
+		case "sdr":
+			return relay(api.DefaultSDRConfig(true).Frame(), proto.CmdSetModeMsg(proto.ModeSdrSpectrum)), true
 		}
 		return nil, false
 	}
@@ -367,10 +388,13 @@ func main() {
 			if rad.IsRelayed(port, radioID) {
 				frames, ok := satRoleFrames(role, byte(radioID))
 				if !ok {
-					log.Printf("radio %d → role %q: satellite firmware can't do this (channel/start-stop only)", radioID, role)
-					continue
+					log.Printf("radio %d → role %q: no satellite command mapping for this role — not applied", radioID, role)
+					return
 				}
-				for _, f := range frames {
+				for i, f := range frames {
+					if i > 0 {
+						time.Sleep(api.SatRelayGap) // see SatRelayGap
+					}
 					sendTo(port, f)
 				}
 				continue
@@ -423,7 +447,7 @@ func main() {
 		demo.PopulateRegistry(reg)
 		src := demo.New()
 		src.Run()
-		go ingest(src, db, hub, rt, st, rad, reg, watch, otaProg, applyRole)
+		go ingest(src, db, hub, rt, st, rad, reg, watch, otaProg, sdrStore, applyRole)
 		log.Printf("demo mode active — simulated network, no hardware required")
 	}
 	if *demoFlag {
@@ -478,7 +502,7 @@ func main() {
 				}
 				readerPtr.Store(reader)
 				log.Printf("reading from %v — waiting for device data…", []string(ports))
-				go ingest(reader, db, hub, rt, st, rad, reg, watch, otaProg, applyRole)
+				go ingest(reader, db, hub, rt, st, rad, reg, watch, otaProg, sdrStore, applyRole)
 				// Re-send the start sequence a few times (the C6 USB-Serial/JTAG can
 				// miss commands right after the port opens) — but only when the
 				// primary has no role assigned. Once radio roles are in use,
@@ -595,13 +619,13 @@ func main() {
 		}
 	}()
 
-	srv := &api.Server{DB: db, Hub: hub, Send: send, Reg: reg, RT: rt, HA: ham, Hue: hue,
+	srv := &api.Server{DB: db, Hub: hub, SDR: sdrStore, Send: send, Reg: reg, RT: rt, HA: ham, Hue: hue,
 		Stats: st, Logs: lb, Web: webui.HTML, SendTo: sendTo, Radios: rad, Watch: watch, OtaActive: &otaActive, OtaProg: otaProg,
 		SaveConfig: saveConfig, SetRole: setRole, Roles: rolesSnapshot,
 		Reconnect: reconnect, About: aboutInfo(), Prefs: prefsSnapshot,
-		Silence:  func() int { cfgMu.Lock(); defer cfgMu.Unlock(); return cfg.IncidentSilenceS },
-		Channel:  func() int { cfgMu.Lock(); defer cfgMu.Unlock(); return cfg.Channel },
-		HopDwell: func() int { cfgMu.Lock(); defer cfgMu.Unlock(); return cfg.HopDwellMs },
+		Silence:    func() int { cfgMu.Lock(); defer cfgMu.Unlock(); return cfg.IncidentSilenceS },
+		Channel:    func() int { cfgMu.Lock(); defer cfgMu.Unlock(); return cfg.Channel },
+		HopDwell:   func() int { cfgMu.Lock(); defer cfgMu.Unlock(); return cfg.HopDwellMs },
 		DemoActive: &demoActive, NoHardwareDetected: &noHardwareDetected, EnterDemo: enterDemoMode}
 	addr := ":" + strconv.Itoa(*httpPort)
 	log.Printf("zbsniff tethered host on http://localhost%s", addr)
@@ -661,7 +685,7 @@ type msgSource interface {
 	C() <-chan serialio.Tagged
 }
 
-func ingest(r msgSource, db *store.DB, hub *api.Hub, rt *runtime.Runtime, st *stats.Stats, rad *radios.Tracker, reg *names.Registry, watch *api.WatchSet, otaProg *api.OtaProgress, onNewRadio func(int)) {
+func ingest(r msgSource, db *store.DB, hub *api.Hub, rt *runtime.Runtime, st *stats.Stats, rad *radios.Tracker, reg *names.Registry, watch *api.WatchSet, otaProg *api.OtaProgress, sdrStore *sdr.Store, onNewRadio func(int)) {
 	first := true
 	for t := range r.C() {
 		if first {
@@ -783,6 +807,13 @@ func ingest(r msgSource, db *store.DB, hub *api.Hub, rt *runtime.Runtime, st *st
 			hub.Publish(map[string]any{
 				"kind": "ed", "channel": m.Channel, "ed_dbm": m.EdDBm, "sweep_id": m.SweepID,
 			})
+		case *proto.SdrSegment:
+			// Not stored in the DB: ~10 sweeps/s would starve its mutex (see the
+			// DB-starvation notes) — the sdr store keeps a bounded in-memory ring.
+			rad.Saw(t.Port, int(m.RadioID), -1, false)
+			for _, tr := range sdrStore.Add(m) {
+				hub.Publish(api.SDREvent(tr))
+			}
 		case *proto.Incident:
 			st.Incidents.Add(1)
 			if m.Data != nil {
@@ -816,7 +847,8 @@ func ingest(r msgSource, db *store.DB, hub *api.Hub, rt *runtime.Runtime, st *st
 			}
 			rad.SetMode(t.Port, int(m.RadioID), int(m.Mode))
 			rad.SetUptime(t.Port, int(m.RadioID), int(m.UptimeS))
-			modeNames := []string{"idle", "capture", "ed-sweep", "capture+ed"}
+			rad.SetSDR(t.Port, int(m.RadioID), m.Caps&proto.CapSDR != 0)
+			modeNames := []string{"idle", "capture", "ed-sweep", "capture+ed", "sdr"}
 			mode := "?"
 			if int(m.Mode) < len(modeNames) {
 				mode = modeNames[m.Mode]
@@ -826,6 +858,7 @@ func ingest(r msgSource, db *store.DB, hub *api.Hub, rt *runtime.Runtime, st *st
 				"captured": m.Captured, "dropped_buf": m.DroppedBuf, "radio": m.RadioID,
 				"uptime_s": m.UptimeS, "hop_dwell_ms": m.HopDwellMs,
 				"fw":      fmt.Sprintf("%d.%d", m.FWMajor, m.FWMinor),
+				"sdr":     m.Caps&proto.CapSDR != 0,
 				"decrypt": rt.HasKey(),
 			}
 			rt.SetStatus(st)

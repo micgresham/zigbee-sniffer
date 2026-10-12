@@ -111,8 +111,13 @@ static void poll_task(void *arg)
                         if (s_cb) s_cb((uint8_t)(i + 1), &cf);
                     }
                 } else {
-                    // STATUS carries radio_id as byte 0 too — same fixed override.
-                    if (type == MSG_STATUS && pl_len >= 1) ((uint8_t *)pl)[0] = (uint8_t)(i + 1);
+                    // STATUS, ED/probe results and SDR spectrum segments all
+                    // carry radio_id as byte 0 too — same fixed slot override.
+                    // (Without it they kept the satellite's NVS id, default 1,
+                    // so e.g. slot 3's spectrum showed up as radio 1's.)
+                    if ((type == MSG_STATUS || type == MSG_ED_RESULT || type == MSG_PROBE_RESULT ||
+                         type == MSG_SDR_SPECTRUM) && pl_len >= 1)
+                        ((uint8_t *)pl)[0] = (uint8_t)(i + 1);
                     if (s_msg_cb) s_msg_cb(type, pl, pl_len); // e.g. MSG_OTA_STATUS
                 }
             }

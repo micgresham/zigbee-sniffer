@@ -1,4 +1,5 @@
 // beacon.c — see beacon.h.
+#include "radio_capture.h"
 #include "beacon.h"
 #include "esp_ieee802154.h"
 
@@ -6,6 +7,7 @@ static uint8_t s_seq = 0xC0;
 
 void beacon_request_send(void)
 {
+    if (radio_capture_suspended()) return;   // RF is lent to the SDR
     // The radio must be awake to transmit. If capture was stopped it's asleep,
     // so wake it into RX first (this also lets us hear the beacon replies).
     esp_ieee802154_set_rx_when_idle(true);

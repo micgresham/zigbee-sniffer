@@ -33,6 +33,11 @@ type Source struct {
 	// and its status reports mode_id=2 (ED sweep) instead of 1 (capturing)
 	// while this is set.
 	spectrumRadio atomic.Int32
+
+	// sdrRadio is the radioID running the simulated wideband SDR sweep (see
+	// sdr.go), or -1; it reports mode_id=4 instead of 2 while set.
+	sdrRadio atomic.Int32
+	sdr      *sdrRun // guarded by scanMu
 }
 
 // activeSource lets the API layer trigger a simulated spectrum scan without
@@ -44,6 +49,7 @@ var activeSource atomic.Pointer[Source]
 func New() *Source {
 	s := &Source{out: make(chan serialio.Tagged, 1000), stop: make(chan struct{})}
 	s.spectrumRadio.Store(-1)
+	s.sdrRadio.Store(-1)
 	activeSource.Store(s)
 	return s
 }
@@ -146,12 +152,17 @@ func (s *Source) statusLoop() {
 		case <-tick.C:
 			sweeping := s.spectrumRadio.Load()
 			mode0, mode1 := byte(1), byte(1)
-			if sweeping == 0 {
+			sdrOn := s.sdrRadio.Load()
+			if sdrOn == 0 {
+				mode0 = proto.ModeSdrSpectrum
+			} else if sweeping == 0 {
 				mode0 = 2 // ED sweep — matches proto.ModeEdSweep, shown as "ED sweep" in the header
 			} else {
 				homeCaptured += uint32(2 + rand.Intn(4))
 			}
-			if sweeping == 1 {
+			if sdrOn == 1 {
+				mode1 = proto.ModeSdrSpectrum
+			} else if sweeping == 1 {
 				mode1 = 2
 			} else {
 				hueCaptured += uint32(1 + rand.Intn(3))
@@ -159,11 +170,11 @@ func (s *Source) statusLoop() {
 			uptime := uint32(time.Since(start).Seconds())
 			s.send(&proto.Status{
 				RadioID: 0, Mode: mode0, Channel: HomeChan, UptimeS: uptime,
-				Captured: homeCaptured, FWMajor: 0, FWMinor: 29,
+				Captured: homeCaptured, FWMajor: 0, FWMinor: 29, Caps: proto.CapSDR,
 			})
 			s.send(&proto.Status{
 				RadioID: 1, Mode: mode1, Channel: HueChan, UptimeS: uptime,
-				Captured: hueCaptured, FWMajor: 0, FWMinor: 29,
+				Captured: hueCaptured, FWMajor: 0, FWMinor: 29, Caps: proto.CapSDR,
 			})
 		}
 	}

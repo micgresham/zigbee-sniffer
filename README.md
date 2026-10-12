@@ -3,9 +3,32 @@
 A full-featured IEEE 802.15.4 / Zigbee diagnostic tool built on the **ESP32-C6**. Unlike the
 existing ESP32 sniffers that only stream frames to Wireshark, this project adds device
 discovery, per-device message history, an LQI/RSSI **routing tree**, **incident logging** for
-"device went unresponsive" problems, **RF spectrum / interference analysis** using the
-radio's Energy-Detect (ED) scan, and **neighbouring-network discovery** (passive survey +
-active beacon-request scan across channels 11–26).
+"device went unresponsive" problems, **RF spectrum / interference analysis** — a wideband
+spectrum analyzer and waterfall for the whole 2.4 GHz band, plus the radio's Energy-Detect (ED)
+scan — and **neighbouring-network discovery** (passive survey + active beacon-request scan
+across channels 11–26).
+
+## New: wideband spectrum analysis (host 1.2.0 · firmware 0.34)
+
+![Wideband spectrum and waterfall from an ESP32-C6, captured live](docs/images/rf-spectrum-sdr-hero.png)
+
+The same ESP32-C6 that sniffs your Zigbee network can now show **everything on the 2.4 GHz
+band**: Wi-Fi's 20 MHz humps, BLE advertising and connection hops, your Zigbee traffic, microwave
+ovens and other interference, as a live spectrum trace over a scrolling waterfall. It uses
+an undocumented debug path in the C6's Wi-Fi receiver to capture raw I/Q samples at 80 MS/s, runs
+the FFTs on the chip, and the host stitches five 80 MHz slices into one 2400–2483.5 MHz view, with
+Zigbee and Wi-Fi channels overlaid and hover-to-identify.
+
+- Runs on **tethered and satellite** radios — give a satellite the `sdr` role to watch the band
+  *at a problem device's location* while the primary keeps capturing.
+- Average or peak detector, max hold, zoom presets, color schemes, auto-ranging.
+- Credit: the I/Q capture path was discovered and published by the
+  [ESPARGOS project (ESP-SDR)](https://espargos.net/espsdr/); this is an independent, MIT-licensed
+  implementation.
+- First hardware results and known issues: [docs/spectrum.md](docs/spectrum.md).
+
+Also new: a native **macOS desktop app** wrapping the tethered host —
+see [tether/README.md](tether/README.md#desktop-app-macos).
 
 > **Why this exists:** to diagnose intermittent Zigbee dropouts on a Home Assistant network —
 > capturing what is *actually happening on-air* when a device drops, and correlating it with
@@ -105,6 +128,13 @@ pip install -e .
 python -m zbsniff.tools.pcap_bridge --port /dev/ttyACM0 | wireshark -k -i -
 ```
 
+### Desktop app (macOS)
+```bash
+tether/cmd/zbsniff-desktop/build.sh
+open tether/cmd/zbsniff-desktop/build/bin/zbsniff-desktop.app
+```
+The tethered host in a native window — see [tether/README.md](tether/README.md#desktop-app-macos).
+
 ### Firmware (standalone, no PC)
 ```bash
 cd firmware
@@ -124,7 +154,8 @@ Also available in **Word**: [quickstart.docx](docs/quickstart.docx) · [user-gui
 ![Architecture](docs/images/architecture.svg)
 
 Everything else is under [`docs/`](docs/): [architecture.md](docs/architecture.md),
-[networks.md](docs/networks.md) (seeing other Zigbee networks), [spectrum.md](docs/spectrum.md),
+[networks.md](docs/networks.md) (seeing other Zigbee networks), [spectrum.md](docs/spectrum.md)
+(wideband SDR spectrum + channel energy),
 [deployment-addon.md](docs/deployment-addon.md) (run inside Home Assistant), [ota.md](docs/ota.md)
 (firmware updates), [hardware.md](docs/hardware.md), [troubleshooting.md](docs/troubleshooting.md),
 and the [protocol spec](protocol/framing.md).

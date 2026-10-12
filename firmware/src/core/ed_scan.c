@@ -63,6 +63,7 @@ int8_t ed_measure(uint8_t channel, uint32_t duration_us)
 uint16_t ed_sweep(uint32_t hop_mask, uint32_t dwell_us, ed_sample_cb_t cb, void *ctx)
 {
     uint16_t id = ++s_sweep_id;
+    if (radio_capture_suspended()) return id;   // RF is lent to the SDR — no 802.15.4 HAL
     // Remember the capture channel: the sweep walks 11..26 and would otherwise
     // leave the radio parked on channel 26, so capture "resumes" deaf.
     uint8_t saved_ch = radio_capture_get_channel();

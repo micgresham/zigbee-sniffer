@@ -75,6 +75,26 @@ only to decrypt join/rekey and a few APS-secured commands — not required for n
 a future enhancement. Note: **child devices show up even *without* the key**, because the NWK
 header (source/destination addresses) is unencrypted.
 
+## Desktop app (macOS)
+
+`cmd/zbsniff-desktop` wraps this host in a native window (Wails v2): it starts the same `zbsniff`
+binary as a child process, waits for the dashboard, and shows it — no terminal or browser tab.
+Quitting the app stops the host.
+
+```sh
+cmd/zbsniff-desktop/build.sh                            # → cmd/zbsniff-desktop/build/bin/zbsniff-desktop.app
+cmd/zbsniff-desktop/build.sh -platform darwin/universal # Apple Silicon + Intel
+open cmd/zbsniff-desktop/build/bin/zbsniff-desktop.app
+```
+
+Needs the Wails CLI (`go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0`). The app keeps
+its own config, database and `zbsniff.log` in `~/Library/Application Support/zbsniff-desktop/`
+(menu **Sniffer → Show Data Folder**), and serves the dashboard on port 8787 (or any free port),
+so it can run alongside the CLI on 8080. Overrides, set in the environment when launching from a
+terminal: `ZBSNIFF_DATA` (data folder — point it at this directory to share the CLI's config and
+history), `ZBSNIFF_HTTP_PORT`, `ZBSNIFF_DEMO=1`, `ZBSNIFF_ARGS` (extra flags, e.g.
+`"--channel 20"`), `ZBSNIFF_BIN`.
+
 ## Control & Config (web UI + REST)
 
 The UI has a **Control & Config** panel that drives the node live; every control maps to a REST

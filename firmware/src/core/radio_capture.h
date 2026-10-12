@@ -25,6 +25,15 @@ uint8_t radio_capture_get_channel(void);
 void radio_capture_start(void);  // begin receiving
 void radio_capture_stop(void);   // stop receiving
 
+// Hand the RF to another user (the wideband SDR) and take it back. Call with
+// radio_lock() held. While suspended, start/stop/set_channel just record the
+// requested state; resume re-enables the driver and applies it. Anything that
+// drives the 802.15.4 HAL directly (ED, probe, beacon, raw TX) must check
+// radio_capture_suspended() first.
+void radio_capture_suspend(void);
+void radio_capture_resume(void);
+bool radio_capture_suspended(void);
+
 uint32_t radio_capture_count(void);        // frames captured
 uint32_t radio_capture_dropped_buf(void);  // frames dropped (queue full)
 

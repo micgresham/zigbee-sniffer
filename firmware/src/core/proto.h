@@ -18,9 +18,10 @@
 
 // Right-sized buffer for messages the firmware *originates* (captured frames,
 // ED, status, incidents). The largest is a CAPTURED_FRAME (~14 meta + 127 PSDU)
-// or an incident JSON (~224 B). 256 B payload covers all; using ZB_MAX_PAYLOAD
+// or an incident JSON (~224 B) — or an SDR_SPECTRUM segment (22 B header +
+// 256 power codes = 278 B). 288 B payload covers all; using ZB_MAX_PAYLOAD
 // here would put a ~2 KB buffer on the stack and overflow the main task.
-#define ZB_MAX_TX (ZB_FRAME_OVERHEAD + 256)
+#define ZB_MAX_TX (ZB_FRAME_OVERHEAD + 288)
 
 // Message types — device -> host (0x0_)
 typedef enum {
@@ -32,6 +33,7 @@ typedef enum {
     MSG_INCIDENT       = 0x06,   // payload: UTF-8 JSON (see docs/incidents.md)
     MSG_PROBE_RESULT   = 0x07,   // radio_id(1) target(2) acked(1) rssi(i8) lqi(1)
     MSG_OTA_STATUS     = 0x08,   // target(1) state(1) received(4) total(4) err(1)
+    MSG_SDR_SPECTRUM   = 0x09,   // one LO segment of a wideband sweep — see SDR_SPECTRUM below
     // host -> device (0x8_)
     CMD_SET_CHANNEL    = 0x81,
     CMD_SET_MODE       = 0x82,
@@ -65,7 +67,23 @@ typedef enum {
     // normal SPI decoder and dispatches it through on_command() as if received
     // directly. Satellites are thus fully symmetric with the primary radio.
     CMD_SAT_RELAY       = 0x94, // target(1) inner_frame(...)
+    // Wideband SDR sweep settings, applied from the next sweep on (the radio
+    // enters the sweep with CMD_SET_MODE MODE_SDR_SPECTRUM):
+    //   n_lo(1) lo_mhz(2 x n_lo) fft_log2(1) n_avg(1) detector(1) interval_ms(2)
+    CMD_SDR_CONFIG      = 0x95,
 } zb_msg_type_t;
+
+// MSG_SDR_SPECTRUM payload (little-endian), SDR_HDR_LEN bytes then the bins:
+//   0 radio_id(1)   1 sweep_id(2)   3 seg_idx(1)   4 seg_count(1)
+//   5 lo_mhz(2)     7 fft_log2(1)   8 sample_rate_hz(4)
+//  12 n_ffts(1)    13 flags(1)     14 gain_min(1) 15 gain_max(1)
+//  16 timestamp_ms(4)  20 codes_per_db(1)  21 code_floor_dbfs(int8)
+//  22 codes[2^fft_log2] — lowest frequency (LO - fs/2) first;
+//     dBFS = code / codes_per_db + code_floor_dbfs
+#define SDR_HDR_LEN 22
+
+// STATUS capability bits (payload byte 27; absent from older firmware).
+#define CAP_SDR 0x01   // radio can run MODE_SDR_SPECTRUM
 
 // OTA target: 0 = this (tethered) C6, 1..3 = satellite over SPI.
 // OTA state (MSG_OTA_STATUS.state).
@@ -85,6 +103,7 @@ typedef enum {
     MODE_CAPTURE         = 1,
     MODE_ED_SWEEP        = 2,
     MODE_CAPTURE_PLUS_ED = 3,
+    MODE_SDR_SPECTRUM    = 4,   // raw-I/Q wideband sweep; 802.15.4 is suspended meanwhile
 } zb_mode_t;
 
 // CAPTURED_FRAME flags

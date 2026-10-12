@@ -42,6 +42,13 @@ Swap `-e` for `standalone` or `satellite`.
   neighbouring coordinators/routers reply with a beacon revealing their PAN — the active
   network-discovery scan. See [networks.md](networks.md).
 - **`config_nvs.c`** persists channel/mode/hop/network-key/Wi-Fi settings in NVS.
+- **`sdr_capture.c` / `sdr_spectrum.c`** (firmware ≥ 0.34, `-DSDR_ENABLE=1` on tethered and
+  satellite builds) — the wideband SDR: raw I/Q snapshots from the Wi-Fi PHY's sample-dump engine
+  into a reserved 128 KiB SRAM bank, and an on-chip fixed-point FFT that reduces each LO to a
+  256-bin power spectrum. Self-contained (no project protocol dependencies) so they can be reused.
+  **`sdr_mode.c`** is the glue: `MODE_SDR_SPECTRUM`, `CMD_SDR_CONFIG`, `SDR_SPECTRUM` framing, and
+  lending the RF from 802.15.4 (`radio_capture_suspend()/resume()`) for the duration. See
+  [spectrum.md](spectrum.md).
 
 ## usb-sniffer build (Block A)
 

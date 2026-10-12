@@ -6,3 +6,7 @@ zbsniff.sqlite
 zbsniff.yaml
 zbsniff.yaml.key
 *.yaml.key
+
+# desktop app build output (cmd/zbsniff-desktop/build.sh) and generated Wails runtime
+cmd/zbsniff-desktop/build/bin/
+cmd/zbsniff-desktop/frontend/wailsjs/
