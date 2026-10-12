@@ -126,6 +126,27 @@ coordinator's receiver regardless (front-end desense).
    ([channels-reference.md](channels-reference.md)), and get the coordinator off USB3 ports onto
    a short USB 2.0 extension.
 
+## Satellite spectrum / SDR shows under the wrong radio, or SDR Start does nothing on a satellite
+
+Both fixed during the SDR bring-up. A satellite's wideband spectrum (and ED/probe results)
+appearing under **R1** needs the **primary** re-flashed with current tethered firmware — it now
+labels them by SPI slot. **Start** leaving a satellite in capture mode needs a current host, which
+spaces relayed commands so the satellite doesn't drop the mode change. Details in
+[spectrum.md](spectrum.md#satellite-fixes-made-during-bring-up).
+
+## A radio goes silent during or after a long SDR run
+
+Known issue, not yet root-caused (see [spectrum.md](spectrum.md#known-issues)): the radio resets
+and then sends nothing, not even its STATUS heartbeat. Re-flash it:
+
+```bash
+cd firmware
+pio run -e tethered -t upload --upload-port /dev/cu.usbmodemXXXX
+```
+
+If it stays silent, erase first (`-t erase`, then upload) — this also clears its saved channel and
+network key.
+
 ## Host tests
 
 ```bash

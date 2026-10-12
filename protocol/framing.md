@@ -79,6 +79,7 @@ Periodic device status / heartbeat.
 | dropped_buf  | 4    | u32 frames dropped on buffer overflow (backpressure) |
 | fw_major     | 1    | |
 | fw_minor     | 1    | |
+| caps         | 1    | capability bits (absent before firmware 0.34 — treat as 0): bit 0 `CAP_SDR` = can run `SDR_SPECTRUM` mode |
 
 #### `0x04 LOG`
 Free-text log line (UTF-8) for diagnostics. Payload = bytes of the message.
@@ -101,6 +102,31 @@ Result of an active MAC probe (see `CMD_PROBE`). Payload:
 Firmware-update progress (see `CMD_OTA_*` and [docs/ota.md](../docs/ota.md)). Payload:
 `target(1)` `state(1)` `received(4, LE)` `total(4, LE)` `err(1)`.
 `state`: 0 idle · 1 receiving · 2 writing · 3 verifying · 4 ok(rebooting) · 5 error.
+
+#### `0x09 SDR_SPECTRUM`
+One LO's slice of a wideband SDR sweep (mode `SDR_SPECTRUM`; see [docs/spectrum.md](../docs/spectrum.md)).
+A sweep is `seg_count` consecutive messages sharing `sweep_id`; the host stitches them.
+
+| Field           | Size | Notes |
+|-----------------|------|-------|
+| radio_id        | 1    | |
+| sweep_id        | 2    | u16, same for every segment of one sweep |
+| seg_idx         | 1    | `0..seg_count-1`, in LO order |
+| seg_count       | 1    | LOs in the sweep |
+| lo_mhz          | 2    | u16, receiver LO for this segment |
+| fft_log2        | 1    | bins = `2^fft_log2` (7 or 8 on the wire) |
+| sample_rate_hz  | 4    | u32, complex sample rate (80 000 000 on ESP32-C6) — the segment spans `lo ± rate/2` |
+| n_ffts          | 1    | FFT blocks reduced into this segment |
+| flags           | 1    | bit 0 peak detector (else mean) · bit 1 capture failed (bins invalid) · bit 2 ADC clipped · bit 3 earlier segment dropped in transport |
+| gain_min        | 1    | lowest RX gain index seen in the snapshot |
+| gain_max        | 1    | highest RX gain index seen |
+| timestamp_ms    | 4    | u32 device ms at the end of this segment |
+| codes_per_db    | 1    | `2` (0.5 dB steps) |
+| code_floor_dbfs | 1    | int8, `-128` |
+| codes           | 2^fft_log2 | one byte per bin, **lowest frequency first** (bin 0 = `lo − rate/2`); `dBFS = code / codes_per_db + code_floor_dbfs`. Code 0 is a floor, not silence; the center bin is the removed DC term. |
+
+Requires firmware ≥ 0.34 on a tethered or satellite C6 (`STATUS.caps` bit 0). A satellite's segments
+are relayed up through the primary like its other messages.
 
 ---
 
@@ -127,6 +153,7 @@ Firmware-update progress (see `CMD_OTA_*` and [docs/ota.md](../docs/ota.md)). Pa
 | `0x91` | `CMD_SAT_SET_CHANNEL` | `target(1, 1..3)` `channel(1, 11..26)` — relayed to satellite `target` over SPI (tethered/standalone primary only); lets one satellite sit on a different channel than the primary. |
 | `0x92` | `CMD_SAT_START`   | `target(1, 1..3)` — relayed: (re)start capture on satellite `target`. |
 | `0x93` | `CMD_SAT_STOP`    | `target(1, 1..3)` — relayed: stop capture on satellite `target`. |
+| `0x95` | `CMD_SDR_CONFIG`  | `n_lo(1, 1..8)` `lo_mhz(2 × n_lo, LE, 2300..2600)` `fft_log2(1, 7..8)` `n_avg(1, 0 = all that fit)` `detector(1, 0 mean · 1 peak)` `interval_ms(2, LE, minimum time between sweep starts)` — wideband SDR plan, applied from the next sweep. Enter the sweep with `CMD_SET_MODE 4`. ACK result 1 = rejected. Requires firmware ≥ 0.34. |
 | `0x94` | `CMD_SAT_RELAY`   | `target(1, 1..3)` `inner_frame(n)` — generic relay: the primary strips `target` and forwards the **complete inner zb frame** verbatim over SPI to satellite `target`. Any host→device command reaches a satellite this way. Requires firmware ≥ 0.32. |
 
 The `CMD_SAT_*` commands exist because `CMD_SET_CHANNEL`/`CMD_START`/`CMD_STOP` (above) always apply
@@ -139,8 +166,20 @@ backward compatibility. `CMD_SAT_RELAY` (≥ 0.32) generalises this: it carries 
 frame, so **every** command — `CMD_SET_MODE`, `CMD_ED_SCAN`, `CMD_SET_HOP`, `CMD_PROBE`,
 `CMD_BEACON_REQ`, `CMD_TX_RAW` — reaches a satellite unchanged. As of firmware 0.32 satellite
 firmware implements the full command set and its `MSG_ED_RESULT`/`MSG_PROBE_RESULT` are relayed back
-up through the primary, so a satellite can serve **any** radio role (sniffer, spectrum, tester,
-hopper), not just capture.
+up through the primary, so a satellite can serve **any** radio role (sniffer, spectrum, sdr,
+tester, hopper), not just capture.
+
+**Pace relayed commands.** The primary clocks each relayed frame to the satellite as soon as it
+arrives, and the satellite's SPI slave only re-arms after it has handled the previous transaction.
+Two `CMD_SAT_RELAY`s to the **same** satellite sent back to back can lose the second, so hosts
+space them (the Go host waits 25 ms, `api.SatRelayGap`). Different satellites need no gap.
+
+**`radio_id` on relayed messages.** A satellite's `radio_id` is fixed by its SPI slot (slot *n* =
+radio *n+1*). The primary overwrites payload byte 0 with that slot id on every satellite message
+that carries one — `CAPTURED_FRAME`, `STATUS`, `ED_RESULT`, `PROBE_RESULT`, `SDR_SPECTRUM` — so a
+satellite's own NVS id never leaks through. (Before firmware 0.34's fix only frames and STATUS were
+overridden, so `SDR_SPECTRUM`/`ED_RESULT` from slot 3 showed up under the satellite's default
+id 1.)
 
 ---
 
@@ -153,6 +192,7 @@ hopper), not just capture.
 | 1 | `CAPTURE` | promiscuous capture on the configured channel(s) |
 | 2 | `ED_SWEEP` | continuous energy-detect sweep (spectrum) |
 | 3 | `CAPTURE_PLUS_ED` | interleave capture with periodic ED (single-radio compromise) |
+| 4 | `SDR_SPECTRUM` | wideband raw-I/Q sweep via the Wi-Fi PHY (≥ 0.34, tethered/satellite); 802.15.4 is suspended until the mode changes |
 
 ### `flags` (CAPTURED_FRAME)
 | Bit | Name | |

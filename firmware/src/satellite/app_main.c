@@ -21,6 +21,7 @@
 #include "beacon.h"
 #include "esp_ieee802154.h"
 #include "ota.h"
+#include "sdr_mode.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "led.h"
@@ -46,7 +47,7 @@ static volatile uint16_t s_hop_dwell_ms;
 // radio the same way it already does for the primary's own STATUS.
 static void sat_send_status(uint64_t boot_us)
 {
-    uint8_t p[27];
+    uint8_t p[28];
     size_t n = 0;
     uint32_t uptime = (uint32_t)((esp_timer_get_time() - boot_us) / 1000000ULL);
     p[n++] = s_cfg.radio_id;
@@ -63,6 +64,7 @@ static void sat_send_status(uint64_t boot_us)
     for (int i = 0; i < 4; i++) p[n++] = (uint8_t)(dbuf >> (8 * i));
     p[n++] = FW_MAJOR;
     p[n++] = FW_MINOR;
+    p[n++] = sdr_mode_caps();
     uint8_t out[ZB_MAX_TX];
     size_t m = zb_encode(MSG_STATUS, p, (uint16_t)n, out, sizeof(out));
     if (m) spi_slave_send(out, m);
@@ -113,6 +115,18 @@ static void sat_ed_cb(const ed_sample_t *s, void *ctx)
     uint8_t out[ZB_MAX_TX];
     size_t m = zb_encode(MSG_ED_RESULT, p, (uint16_t)n, out, sizeof(out));
     if (m && !spi_slave_send(out, m)) s_dropped++;
+}
+
+// sdr_mode's emitter. A full sweep (~1.4 KB) fits the SPI ring, but the 200 kHz
+// link drains it slowly — the host paces relayed SDR radios via the sweep
+// interval; a full ring just drops the segment (flagged on the next one).
+static bool sat_sdr_emit(uint8_t type, const uint8_t *payload, uint16_t len)
+{
+    uint8_t out[ZB_MAX_TX];
+    size_t m = zb_encode(type, payload, len, out, sizeof(out));
+    if (m && spi_slave_send(out, m)) return true;
+    s_dropped++;
+    return false;
 }
 
 // Active-probe result → MSG_PROBE_RESULT over SPI (matches the primary's probe_cb).
@@ -303,6 +317,7 @@ static void on_command(uint8_t type, const uint8_t *p, uint16_t len)
     case CMD_TX_RAW:
         if (len >= 3 && len <= 125) {
             radio_lock();
+            if (radio_capture_suspended()) { radio_unlock(); break; }   // RF lent to the SDR
             esp_ieee802154_set_rx_when_idle(true);
             esp_ieee802154_receive();
             uint8_t f[1 + 128];
@@ -320,6 +335,10 @@ static void on_command(uint8_t type, const uint8_t *p, uint16_t len)
     case CMD_OTA_END:
     case CMD_OTA_ABORT:
         ota_enqueue(type, p, len);
+        break;
+    case CMD_SDR_CONFIG:
+        // Settings only — the sweep runs on the main loop in MODE_SDR_SPECTRUM.
+        if (!sdr_mode_configure(p, len)) ESP_LOGW(TAG, "rejected SDR config (len=%u)", len);
         break;
     default:
         break;
@@ -356,6 +375,8 @@ void app_main(void)
     uint64_t last_hop = boot_us;
     uint8_t hop_idx = 0;
     for (;;) {
+        // Leaving MODE_SDR_SPECTRUM hands the RF back to 802.15.4 (no-op otherwise).
+        if (s_mode != MODE_SDR_SPECTRUM) sdr_mode_leave();
         // Mode-driven, mirroring the primary's main loop: capture drains frames,
         // ED_SWEEP runs a continuous sweep, else idle. Each holds the radio lock
         // only briefly so a relayed command (mode/channel change, probe) applies
@@ -375,6 +396,8 @@ void app_main(void)
             ed_sweep(s_hop_mask, (s_hop_dwell_ms ? s_hop_dwell_ms : 5) * 1000, sat_ed_cb, NULL);
             radio_unlock();
             vTaskDelay(pdMS_TO_TICKS(50));
+        } else if (s_mode == MODE_SDR_SPECTRUM) {
+            sdr_mode_run(s_cfg.radio_id, sat_sdr_emit);
         } else {
             vTaskDelay(pdMS_TO_TICKS(20));
         }

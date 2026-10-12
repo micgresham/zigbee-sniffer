@@ -33,7 +33,9 @@ encrypted at rest (see [Config](#config)). Flags override the file for that run.
 | `api` | REST + WebSocket server (`Hub` fans out live events); serves the embedded UI |
 | `names` | address→friendly-name registry (ZHA backup + live HA WebSocket), coordinator LQI |
 | `runtime` | mutable network key + latest device status snapshot |
-| `radios` | tracks connected dongle identities + roles (sniffer/spectrum/tester/hopper/idle) |
+| `radios` | tracks connected dongle identities + roles (sniffer/spectrum/sdr/tester/hopper/idle) and SDR capability |
+| `sdr` | stitches wideband `SDR_SPECTRUM` segments into full-band traces; in-memory history per radio for the waterfall (not stored in SQLite) |
+| `demo` | simulated network for `--demo`, including a simulated wideband spectrum |
 | `sched` | active-testing probe scheduler |
 | `stats` | connection/ingest counters + last-message age (feeds the liveness watchdog) |
 | `config` | flat YAML load/save; AES-256-GCM encryption of the network key + HA token (sidecar `.key`) |
@@ -72,6 +74,15 @@ mutex. Two things keep it fast under long runs:
   WAL grows for days and every read slows with it (the "app gets sluggish after a few days"
   failure). `/api/diagnostics` is additionally cached for 10 s server-side, and the web UI
   pauses its 3 s poll while the tab is hidden.
+
+### Desktop app (`cmd/zbsniff-desktop`)
+
+A Wails v2 shell for macOS: starts this same `zbsniff` binary as a child process (bundled inside
+the `.app` by `build.sh`), waits for `/api/about`, then points its window at the real
+`http://localhost:<port>` dashboard — not Wails' asset bridge, which doesn't carry the dashboard's
+WebSocket. Data lives in `~/Library/Application Support/zbsniff-desktop/`; overrides via
+`ZBSNIFF_DATA`, `ZBSNIFF_HTTP_PORT` (default 8787), `ZBSNIFF_DEMO`, `ZBSNIFF_ARGS`, `ZBSNIFF_BIN`.
+Build and usage: [tether/README.md](../tether/README.md#desktop-app-macos).
 
 ### Config
 

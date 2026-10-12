@@ -159,6 +159,15 @@
                 {
                     "name": "fw_minor",
                     "type": "u8"
+                },
+                {
+                    "name": "caps",
+                    "type": "u8",
+                    "optional": true,
+                    "min_fw": "0.34",
+                    "bits": {
+                        "sdr": 1
+                    }
                 }
             ]
         },
@@ -398,6 +407,112 @@
                     "type": "bytes"
                 }
             ]
+        },
+        "SDR_SPECTRUM": {
+            "type": 9,
+            "dir": "device_to_host",
+            "min_fw": "0.34",
+            "fields": [
+                {
+                    "name": "radio_id",
+                    "type": "u8"
+                },
+                {
+                    "name": "sweep_id",
+                    "type": "u16"
+                },
+                {
+                    "name": "seg_idx",
+                    "type": "u8"
+                },
+                {
+                    "name": "seg_count",
+                    "type": "u8"
+                },
+                {
+                    "name": "lo_mhz",
+                    "type": "u16"
+                },
+                {
+                    "name": "fft_log2",
+                    "type": "u8"
+                },
+                {
+                    "name": "sample_rate_hz",
+                    "type": "u32"
+                },
+                {
+                    "name": "n_ffts",
+                    "type": "u8"
+                },
+                {
+                    "name": "flags",
+                    "type": "u8"
+                },
+                {
+                    "name": "gain_min",
+                    "type": "u8"
+                },
+                {
+                    "name": "gain_max",
+                    "type": "u8"
+                },
+                {
+                    "name": "timestamp_ms",
+                    "type": "u32"
+                },
+                {
+                    "name": "codes_per_db",
+                    "type": "u8"
+                },
+                {
+                    "name": "code_floor_dbfs",
+                    "type": "i8"
+                },
+                {
+                    "name": "codes",
+                    "type": "bytes",
+                    "len": "2^fft_log2"
+                }
+            ],
+            "flags": {
+                "peak": 1,
+                "failed": 2,
+                "clipped": 4,
+                "dropped": 8
+            }
+        },
+        "CMD_SDR_CONFIG": {
+            "type": 149,
+            "dir": "host_to_device",
+            "min_fw": "0.34",
+            "fields": [
+                {
+                    "name": "n_lo",
+                    "type": "u8"
+                },
+                {
+                    "name": "lo_mhz",
+                    "type": "u16[]",
+                    "len": "n_lo"
+                },
+                {
+                    "name": "fft_log2",
+                    "type": "u8"
+                },
+                {
+                    "name": "n_avg",
+                    "type": "u8"
+                },
+                {
+                    "name": "detector",
+                    "type": "u8"
+                },
+                {
+                    "name": "interval_ms",
+                    "type": "u16"
+                }
+            ]
         }
     },
     "enums": {
@@ -405,7 +520,8 @@
             "IDLE": 0,
             "CAPTURE": 1,
             "ED_SWEEP": 2,
-            "CAPTURE_PLUS_ED": 3
+            "CAPTURE_PLUS_ED": 3,
+            "SDR_SPECTRUM": 4
         },
         "flags": {
             "crc_ok": 1,

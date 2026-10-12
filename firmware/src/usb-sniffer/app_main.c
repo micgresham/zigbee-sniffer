@@ -23,6 +23,7 @@
 #include "probe.h"
 #include "beacon.h"
 #include "ota.h"
+#include "sdr_mode.h"
 #include "standalone/spi_master.h"
 #include "transport_usb.h"
 #include "esp_system.h"
@@ -42,6 +43,16 @@ static void send_frame(uint8_t type, const uint8_t *payload, uint16_t len)
     uint8_t out[ZB_MAX_TX];
     size_t n = zb_encode(type, payload, len, out, sizeof(out));
     if (n) transport_usb_write(out, n);
+}
+
+// sdr_mode's emitter: same framing, reports whether it went out.
+static bool sdr_emit(uint8_t type, const uint8_t *payload, uint16_t len)
+{
+    uint8_t out[ZB_MAX_TX];
+    size_t n = zb_encode(type, payload, len, out, sizeof(out));
+    if (!n) return false;
+    transport_usb_write(out, n);
+    return true;
 }
 
 static void send_log(const char *msg)
@@ -75,6 +86,7 @@ static void send_status(void)
     for (int i = 0; i < 4; i++) p[n++] = (uint8_t)(dbuf >> (8 * i));
     p[n++] = FW_MAJOR;
     p[n++] = FW_MINOR;
+    p[n++] = sdr_mode_caps();
     send_frame(MSG_STATUS, p, (uint16_t)n);
 }
 
@@ -153,6 +165,14 @@ static void msg_from_sat(uint8_t type, const uint8_t *pl, uint16_t len)
         memcpy(fixed, pl, len);
         fixed[0] = tag_if_colliding(fixed[0]);
         send_frame(type, fixed, len);
+    } else if (type == MSG_SDR_SPECTRUM && len >= SDR_HDR_LEN) {
+        // Wideband spectrum segments from a satellite in the SDR role — larger
+        // than the path above, and this callback only runs on the SPI poll task.
+        static uint8_t seg[ZB_MAX_TX - ZB_FRAME_OVERHEAD];
+        if (len > sizeof(seg)) return;
+        memcpy(seg, pl, len);
+        seg[0] = tag_if_colliding(seg[0]);
+        send_frame(type, seg, len);
     } else if (type == MSG_OTA_STATUS) {
         send_frame(type, pl, len);
     }
@@ -287,6 +307,7 @@ static void handle_command(uint8_t type, const uint8_t *p, uint16_t len)
         // radio appends the 2-byte FCS, so the PHY length is len + 2.
         if (len >= 3 && len <= 125) {
             radio_lock();
+            if (radio_capture_suspended()) { radio_unlock(); send_ack(type, 2); break; } // RF lent to the SDR
             esp_ieee802154_set_rx_when_idle(true);
             esp_ieee802154_receive();
             uint8_t f[1 + 128];
@@ -350,6 +371,10 @@ static void handle_command(uint8_t type, const uint8_t *p, uint16_t len)
                 spi_master_send_to(target - 1, p + 1, len - 1);
             }
         }
+        break;
+    case CMD_SDR_CONFIG:
+        // Settings only — the sweep itself runs on the main loop in MODE_SDR_SPECTRUM.
+        send_ack(type, sdr_mode_configure(p, len) ? 0 : 1);
         break;
     case CMD_GET_STATUS:
         send_status();
@@ -417,6 +442,9 @@ void app_main(void)
     uint8_t hop_idx = 0;
 
     for (;;) {
+        // Leaving MODE_SDR_SPECTRUM hands the RF back to 802.15.4 (no-op otherwise).
+        if (s_mode != MODE_SDR_SPECTRUM) sdr_mode_leave();
+
         // Drain captured frames (CAPTURE / CAPTURE_PLUS_ED modes).
         if (s_mode == MODE_CAPTURE || s_mode == MODE_CAPTURE_PLUS_ED) {
             while (radio_capture_recv(&cf, 5)) {
@@ -433,6 +461,9 @@ void app_main(void)
             ed_sweep(s_hop_mask, (s_hop_dwell_ms ? s_hop_dwell_ms : 5) * 1000, ed_cb, NULL);
             radio_unlock();
             vTaskDelay(pdMS_TO_TICKS(50));
+        } else if (s_mode == MODE_SDR_SPECTRUM) {
+            // One wideband sweep (802.15.4 suspended meanwhile) — sdr_mode paces it.
+            sdr_mode_run(s_cfg.radio_id, sdr_emit);
         } else {
             vTaskDelay(pdMS_TO_TICKS(20));
         }

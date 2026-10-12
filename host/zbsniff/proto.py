@@ -30,6 +30,7 @@ class Msg(IntEnum):
     LOG = 0x04
     ACK = 0x05
     INCIDENT = 0x06
+    SDR_SPECTRUM = 0x09  # parsed by the Go tether host only
     CMD_SET_CHANNEL = 0x81
     CMD_SET_MODE = 0x82
     CMD_START = 0x83
@@ -39,6 +40,7 @@ class Msg(IntEnum):
     CMD_SET_KEY = 0x87
     CMD_GET_STATUS = 0x88
     CMD_SET_RADIO_ID = 0x89
+    CMD_SDR_CONFIG = 0x95
 
 
 class Mode(IntEnum):
@@ -46,6 +48,7 @@ class Mode(IntEnum):
     CAPTURE = 1
     ED_SWEEP = 2
     CAPTURE_PLUS_ED = 3
+    SDR_SPECTRUM = 4
 
 
 FLAG_CRC_OK = 0x01

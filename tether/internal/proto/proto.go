@@ -28,6 +28,7 @@ const (
 	MsgIncident      = 0x06
 	MsgProbeResult   = 0x07
 	MsgOtaStatus     = 0x08
+	MsgSdrSpectrum   = 0x09
 
 	CmdSetChannel = 0x81
 	CmdSetMode    = 0x82
@@ -52,6 +53,7 @@ const (
 	CmdSatStart      = 0x92
 	CmdSatStop       = 0x93
 	CmdSatRelay      = 0x94
+	CmdSdrConfig     = 0x95
 )
 
 // OTA states (MsgOtaStatus.State).
@@ -70,7 +72,29 @@ const (
 	ModeCapture       = 1
 	ModeEdSweep       = 2
 	ModeCapturePlusEd = 3
+	ModeSdrSpectrum   = 4 // wideband raw-I/Q sweep (802.15.4 suspended meanwhile)
 )
+
+// STATUS capability bits (Status.Caps).
+const (
+	CapSDR = 0x01 // radio can run ModeSdrSpectrum
+)
+
+// SDR detectors (CmdSdrConfigMsg detector).
+const (
+	SdrDetMean = 0
+	SdrDetPeak = 1
+)
+
+// SdrSegment flags.
+const (
+	SdrSegPeak    = 0x01 // codes are peak-hold, not mean
+	SdrSegFailed  = 0x02 // tune/capture failed; codes are meaningless
+	SdrSegClipped = 0x04 // ADC hit full scale
+	SdrSegDropped = 0x08 // an earlier segment was lost in transport
+)
+
+const sdrHdrLen = 22
 
 // CAPTURED_FRAME flags
 const (
@@ -110,6 +134,20 @@ func Encode(msgType byte, payload []byte) []byte {
 	copy(out[2:], body)
 	binary.LittleEndian.PutUint16(out[2+len(body):], crc)
 	return out
+}
+
+// CmdSdrConfigMsg sets the wideband sweep: LO list (MHz), FFT size (log2),
+// FFT blocks averaged per LO (0 = all that fit), detector and minimum sweep
+// interval. Applies from the radio's next sweep.
+func CmdSdrConfigMsg(loMHz []uint16, fftLog2, nAvg, detector byte, intervalMs uint16) []byte {
+	p := make([]byte, 0, 1+2*len(loMHz)+5)
+	p = append(p, byte(len(loMHz)))
+	for _, f := range loMHz {
+		p = binary.LittleEndian.AppendUint16(p, f)
+	}
+	p = append(p, fftLog2, nAvg, detector)
+	p = binary.LittleEndian.AppendUint16(p, intervalMs)
+	return Encode(CmdSdrConfig, p)
 }
 
 // Command builders
@@ -155,6 +193,7 @@ func CmdOtaBeginMsg(target byte, total, crc32 uint32) []byte {
 	binary.LittleEndian.PutUint32(p[5:], crc32)
 	return Encode(CmdOtaBegin, p)
 }
+
 // CmdOtaDataMsg's wire format is deliberately NOT versioned/extended lightly:
 // this message is parsed by whatever firmware is CURRENTLY RUNNING on the
 // target, which is exactly the firmware an OTA update is trying to replace.
@@ -240,6 +279,28 @@ type Status struct {
 	UptimeS    uint32
 	FWMajor    byte
 	FWMinor    byte
+	Caps       byte // Cap* bits; 0 from firmware older than the field
+}
+
+// SdrSegment is one LO's slice of a wideband sweep: Codes[i] is the power of
+// the bin at LoMHz - SampleRate/2 + i*SampleRate/len(Codes), in dBFS =
+// Codes[i]/CodesPerDB + FloorDBFS.
+type SdrSegment struct {
+	RadioID      byte
+	SweepID      uint16
+	SegIdx       byte
+	SegCount     byte
+	LoMHz        uint16
+	FFTLog2      byte
+	SampleRateHz uint32
+	NFFTs        byte
+	Flags        byte
+	GainMin      byte
+	GainMax      byte
+	TimestampMs  uint32
+	CodesPerDB   byte
+	FloorDBFS    int8
+	Codes        []byte
 }
 
 type Incident struct {
@@ -309,6 +370,32 @@ func ParsePayload(msgType byte, p []byte) any {
 			DroppedBuf: binary.LittleEndian.Uint32(p[21:25]),
 			FWMajor:    p[25],
 			FWMinor:    p[26],
+			Caps:       capsByte(p),
+		}
+	case MsgSdrSpectrum:
+		if len(p) < sdrHdrLen {
+			return nil
+		}
+		n := 1 << p[7]
+		if p[7] > 12 || len(p) < sdrHdrLen+n || p[20] == 0 {
+			return nil
+		}
+		return &SdrSegment{
+			RadioID:      p[0],
+			SweepID:      binary.LittleEndian.Uint16(p[1:3]),
+			SegIdx:       p[3],
+			SegCount:     p[4],
+			LoMHz:        binary.LittleEndian.Uint16(p[5:7]),
+			FFTLog2:      p[7],
+			SampleRateHz: binary.LittleEndian.Uint32(p[8:12]),
+			NFFTs:        p[12],
+			Flags:        p[13],
+			GainMin:      p[14],
+			GainMax:      p[15],
+			TimestampMs:  binary.LittleEndian.Uint32(p[16:20]),
+			CodesPerDB:   p[20],
+			FloorDBFS:    int8(p[21]),
+			Codes:        append([]byte(nil), p[sdrHdrLen:sdrHdrLen+n]...),
 		}
 	case MsgIncident:
 		var m map[string]any
@@ -338,6 +425,29 @@ func ParsePayload(msgType byte, p []byte) any {
 		}
 	}
 	return nil
+}
+
+func capsByte(p []byte) byte {
+	if len(p) >= 28 {
+		return p[27]
+	}
+	return 0
+}
+
+// EncodeSdrSegment is the inverse of ParsePayload for MsgSdrSpectrum (used by
+// demo mode and tests).
+func EncodeSdrSegment(s *SdrSegment) []byte {
+	p := make([]byte, sdrHdrLen, sdrHdrLen+len(s.Codes))
+	p[0] = s.RadioID
+	binary.LittleEndian.PutUint16(p[1:], s.SweepID)
+	p[3], p[4] = s.SegIdx, s.SegCount
+	binary.LittleEndian.PutUint16(p[5:], s.LoMHz)
+	p[7] = s.FFTLog2
+	binary.LittleEndian.PutUint32(p[8:], s.SampleRateHz)
+	p[12], p[13], p[14], p[15] = s.NFFTs, s.Flags, s.GainMin, s.GainMax
+	binary.LittleEndian.PutUint32(p[16:], s.TimestampMs)
+	p[20], p[21] = s.CodesPerDB, byte(s.FloorDBFS)
+	return Encode(MsgSdrSpectrum, append(p, s.Codes...))
 }
 
 // StreamDecoder reassembles framed messages from a byte stream.

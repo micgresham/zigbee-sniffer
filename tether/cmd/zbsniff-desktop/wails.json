@@ -1,0 +1,20 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "zbsniff-desktop",
+  "outputfilename": "zbsniff-desktop",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dev:watcher": "",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "Michael Gresham",
+    "email": "micgresham@gmail.com"
+  },
+  "info": {
+    "companyName": "zigbee-sniffer",
+    "productName": "Zigbee Sniffer",
+    "productVersion": "1.2.0",
+    "copyright": "Copyright © 2026 Michael Gresham",
+    "comments": "Desktop shell for the zbsniff tethered host"
+  }
+}

@@ -1,4 +1,5 @@
 // probe.c — see probe.h.
+#include "radio_capture.h"
 #include "probe.h"
 #include "proto.h"
 #include <string.h>
@@ -14,6 +15,7 @@ void probe_init(probe_result_cb_t cb) { s_cb = cb; }
 
 void probe_send(uint16_t target, uint16_t pan_id)
 {
+    if (radio_capture_suspended()) return;   // RF is lent to the SDR
     s_target = target;
     // The radio must be awake to transmit. If capture was stopped it's asleep,
     // so wake it into RX first (also lets us hear the ACK).

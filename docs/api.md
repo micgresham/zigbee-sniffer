@@ -14,6 +14,9 @@ Push channel for live data (JSON events). Message kinds (`kind` field):
 - `survey` — whole-band survey progress (`channel`, `active`, `done`).
 - `probe` — active-test probe result (target, acked, RSSI/LQI).
 - `ota` — firmware-update progress (target, state, received/total).
+- `sdr` — one stitched wideband sweep: `radio`, `sweep`, `ts`, `f0`/`df` (MHz of `db[0]` and point
+  spacing), `db[]` (dBFS, `null` = gap), `los[]`, `peak`, `clipped`, `dropped`, `failed`,
+  `missing`, `n_ffts`, `gain_min`/`gain_max`, `dur_ms`. See [spectrum.md](spectrum.md).
 
 Commands go over REST (below), not the socket. The standalone device's WS additionally accepts
 binary command frames (`set_channel`, `set_mode`, `ed_scan`, `set_key`).
@@ -26,6 +29,11 @@ binary command frames (`set_channel`, `set_mode`, `ed_scan`, `set_key`).
 | GET | `/api/devices/{addr}/messages` | recent decoded messages for a device |
 | GET | `/api/routing` | nodes + edges for the routing tree (LQI-colored) |
 | GET | `/api/spectrum?from=&to=` | ED time-series for the waterfall + channel advice |
+| GET | `/api/sdr` | wideband SDR state: `radios[]` (`radio`, `port`, `relayed`, `capable`, `sweeping`), last plan per radio (`configs`), `last` radio started, `defaults` |
+| GET | `/api/sdr/history?radio=&n=` | up to `n` (≤ 600) recent stitched sweeps, oldest first — primes the waterfall |
+| POST | `/api/sdr/start?radio=&los=&fft=&avg=&det=&interval=` | hand a radio to the wideband SDR (allocates one if `radio` is omitted — check `/api/allocate?fn=sdr` first). `los` = comma-separated LO MHz (default `2412,2427,2442,2457,2472`), `fft` = 7/8 (128/256 bins), `avg` = FFTs per LO (0 = 63), `det` = `mean`/`peak`, `interval` = ms between sweeps (default 0, satellites 250). Re-posting while running updates the plan |
+| POST | `/api/sdr/stop?radio=` | return that radio to 802.15.4 capture |
+| POST | `/api/sdr/clear` | drop stored sweep history |
 | GET | `/api/networks` | every PAN id seen on-air (`networks[]`: `pan`, `channel`, `count`, `last_seen`, `label`) plus `ours` (your PAN) — see [networks.md](networks.md) |
 | GET | `/api/decode?hex=` | layer-by-layer decode of one frame (MAC/NWK/APS/ZCL + raw) for the inspector |
 | GET | `/api/device_info?addr=` | a device's capabilities (endpoints, in/out clusters, manufacturer, model, power) as ZHA discovered them |

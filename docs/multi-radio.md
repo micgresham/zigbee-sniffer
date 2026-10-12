@@ -22,12 +22,21 @@ is purely additive.
 
 > **Satellites are full radios (firmware ≥ 0.32).** A satellite is no longer capture-only — it
 > can take **any** role in the Config → Radios table: `sniffer`, `spectrum` (ED sweep),
+> `sdr` (wideband raw-I/Q spectrum, firmware ≥ 0.34 — see [spectrum.md](spectrum.md)),
 > `tester` (active probe TX), or `hopper`. The host wraps each command in `CMD_SAT_RELAY` so it
 > reaches the satellite over SPI, and the satellite's ED/probe results are relayed back up
 > through the primary. This means a satellite **placed at a problem device's location** can
 > measure that spot's noise floor or probe from there — exactly the "survey near the problem
 > device" case [spectrum.md](spectrum.md) calls for — while the primary keeps capturing your
 > home channel uninterrupted.
+>
+> Fixed during the SDR bring-up (October 2026): the host never actually sent the `spectrum` (or
+> `hopper`) role to a satellite — it logged "applied" with nothing sent; it now relays them. It
+> also spaces relayed commands 25 ms apart, because a satellite drops the second of two
+> back-to-back commands. And the primary now labels a satellite's ED, probe and SDR results with
+> its **slot** radio id (as it already did for frames and status), so they appear under the right
+> radio — this needs the primary re-flashed, not the satellites. See
+> [protocol/framing.md](../protocol/framing.md#host--device--0x8_).
 
 ## Two ways to connect
 

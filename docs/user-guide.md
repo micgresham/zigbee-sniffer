@@ -163,9 +163,33 @@ newest-first, with **friendly names in parentheses** (e.g. `Charlotte ceiling (0
 
 ## RF spectrum tab
 
+### Wideband spectrum panel
+
+![Wideband spectrum](images/rf-spectrum-sdr.png)
+
+A real spectrum analyzer for the whole 2.4 GHz band (2400–2483.5 MHz), built on raw I/Q samples
+from the C6's receiver (tethered and satellite radios, firmware ≥ 0.34):
+- A live **trace** (dBFS) over a scrolling **waterfall**, with Zigbee channels 11–26 shaded (yours
+  in green) and Wi-Fi 1/6/11 bracketed. Hover anywhere for frequency, level, and which Zigbee /
+  Wi-Fi / BLE channel sits there.
+- **Start / Stop** — the radio is handed over to the wideband receiver while it runs (its Zigbee
+  capture pauses), and handed back on Stop. Pick a specific radio in the **radio** list, or leave
+  it on **auto**.
+- **Average / Peak** detector, **max hold**, **span** presets (whole band, your Zigbee channel,
+  Wi-Fi 1/6/11), color schemes, and a dB **range** that tracks the band automatically (**auto**).
+- The footer shows sweeps/s, receiver gain, and warnings for ADC clipping or lost segments.
+
+What you'll see: Wi-Fi as ~20 MHz humps, BLE advertising as steady lines at 2402 / 2426 / 2480 MHz,
+BLE connections and Zigbee as short speckles, microwave ovens as a broad ragged hump above
+2450 MHz. The radio listens ~1 % of the time, so bursts are *sampled* — use **Peak** + **max hold**
+to catch them. Levels are relative (automatic gain is on), so compare signals within a sweep.
+Details, measured results and known issues: [spectrum.md](spectrum.md).
+
+### Channel energy panel
+
 ![RF spectrum analyzer](images/rf-spectrum.png)
 
-A spectrum analyzer built on the radio's energy-detect (ED):
+A channel-by-channel view built on the 802.15.4 radio's energy-detect (ED) — works on every radio:
 - **Scan once** or **Continuous**; adjustable **dwell** (ms/channel); **peak-hold** markers.
 - Per-channel bars + a **Wi-Fi overlap** row (which Wi-Fi channel sits on each Zigbee channel).
 - A **waterfall** showing energy over time. Hatched-grey bars = "no reading" (not zero) — if you
@@ -313,6 +337,7 @@ With up to **4 C6 dongles** plugged in, give each a **role** in **Config → Rad
 | **any** *(default)* | the system tasks it to any function on demand |
 | **sniffer** | passive capture, pinned to the channel |
 | **spectrum** | continuous ED sweep — feeds the spectrum tab without pausing capture |
+| **sdr** | continuous wideband spectrum (raw I/Q) — feeds the Wideband spectrum panel; firmware ≥ 0.34, not the standalone build |
 | **tester** | capture + the default radio for active probes |
 | **hopper** | capture with channel-hopping |
 | **idle** | parked |
@@ -389,6 +414,22 @@ with heavy retry activity throughout. See [ota.md](ota.md) for the wire-level de
 | **probe does nothing** | Enter a real device address; reflash (probe now wakes the radio even if capture is stopped). |
 | **link keeps dropping / device re-enumerates** | The host auto-reconnects; use ↻ Reconnect to force it. |
 | **wrong chip** | You need an ESP32-**C6**, not a C61 (no 802.15.4 radio). |
+| **radio list says "— no SDR"** | That radio's firmware is older than 0.34, or it's the standalone build (its Wi-Fi AP uses the same receiver). |
+| **satellite's wideband spectrum shows under another radio (usually R1)** | Re-flash the **primary** with the latest tethered firmware (it now labels satellite spectrum by SPI slot). |
+| **SDR Start on a satellite does nothing** | Update the host — older hosts sent the SDR config and mode change back to back and the satellite dropped the second. |
+| **radio stops reporting during / after a long SDR run** | Known issue under investigation — re-flash it (`pio run -e tethered -t upload`); if it stays silent, erase first (`-t erase`, which also clears its saved channel and key). |
+
+---
+
+## Desktop app (macOS)
+
+Instead of a terminal plus a browser tab, you can run the dashboard as a native app:
+`tether/cmd/zbsniff-desktop/build.sh` builds **zbsniff-desktop.app**, which starts the same host
+in the background and shows the dashboard in its own window; quitting the app stops the host.
+It keeps its own settings, history and log in `~/Library/Application Support/zbsniff-desktop/`
+(**Sniffer → Show Data Folder**) and uses port 8787, so it can run next to the command-line host.
+To share the command-line host's settings and history, launch it with
+`ZBSNIFF_DATA=<path to tether folder>`. More options: [tether/README.md](../tether/README.md).
 
 ---
 
